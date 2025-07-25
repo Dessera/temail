@@ -18,13 +18,6 @@ main(int argc, char** argv)
     return 1;
   }
 
-  client.login("dessera@qq.com", "faoqrmrxatdjjeag");
-  if (!client.wait_for_ready_read()) {
-    qDebug() << client.error_string();
-  } else {
-    qDebug() << "Login successfully!";
-  }
-
   client.disconnect_from_host();
   if (!client.wait_for_disconnected()) {
     qDebug() << client.error_string();
