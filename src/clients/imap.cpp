@@ -20,6 +20,10 @@ namespace {
 class IMAPResponse
 {
 public:
+  inline static QRegularExpression TAGGED_REG{
+    "(?P<tag>[A-Z]\\d+) (?P<type>[A-Z]+) (?P<data>.*)"
+  };
+
   inline static QRegularExpression UNTAGGED_REG{
     "\\* (?P<type>[A-Z-]+)( (?P<data>.*))?"
   };
@@ -27,6 +31,7 @@ public:
 private:
   QTextStream* _stream;
 
+  QList<QPair<IMAP::ResponseType, QString>> _tagged_response;
   QList<QPair<IMAP::ResponseType, QString>> _untagged_response;
 
 public:
@@ -35,8 +40,16 @@ public:
   {
     auto buffer = QString{};
     while (_stream->readLineInto(&buffer)) {
+      _handle_tagged(buffer);
       _handle_untagged(buffer);
     }
+  }
+
+  [[nodiscard]] TEMAIL_INLINE auto& tagged() const { return _tagged_response; }
+
+  [[nodiscard]] TEMAIL_INLINE auto& tagged(qsizetype index) const
+  {
+    return _tagged_response[index];
   }
 
   [[nodiscard]] TEMAIL_INLINE auto& untagged() const
@@ -50,6 +63,15 @@ public:
   }
 
 private:
+  void _handle_tagged(const QString& buffer)
+  {
+    if (auto parsed = TAGGED_REG.match(buffer); parsed.hasMatch()) {
+      _tagged_response.emplace_back(
+        _str_to_enum<IMAP::ResponseType>(parsed.captured("type")),
+        parsed.captured("data"));
+    }
+  }
+
   void _handle_untagged(const QString& buffer)
   {
     if (auto parsed = UNTAGGED_REG.match(buffer); parsed.hasMatch()) {
@@ -261,6 +283,20 @@ void
 IMAP::_on_ready_read()
 {
   auto resp = IMAPResponse{ &_stream };
+
+  if (_last_cmd == LOGIN) {
+    if (resp.tagged().size() != 1) {
+      _trig_error(E_LOGINFAIL, "Login failed for unexpected response.");
+      return;
+    }
+
+    if (resp.tagged(0).first != OK) {
+      _trig_error(E_LOGINFAIL, resp.tagged(0).second);
+      return;
+    }
+
+    qDebug() << "IMAP4 Client: Login successfully.";
+  }
 
   emit ready_read();
 }
