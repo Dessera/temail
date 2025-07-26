@@ -7,10 +7,11 @@
 #include <qstring.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
+#include <qvariant.h>
 #include <utility>
 
-#include "qvariant.h"
 #include "temail/clients/imap.hpp"
+#include "temail/clients/response.hpp"
 #include "temail/common.hpp"
 #include "temail/tag.hpp"
 
@@ -141,7 +142,7 @@ IMAP::~IMAP()
 }
 
 void
-IMAP::connect_to_host(const QString& url, uint16_t port, SslFlags ssl)
+IMAP::connect_to_host(const QString& url, uint16_t port, SslOption ssl)
 {
   if (is_connected()) {
     return;
@@ -164,7 +165,7 @@ IMAP::connect_to_host(const QString& url, uint16_t port, SslFlags ssl)
 }
 
 void
-IMAP::connect_to_host(const QString& url, SslFlags ssl)
+IMAP::connect_to_host(const QString& url, SslOption ssl)
 {
   connect_to_host(url, 0, ssl);
 }
@@ -298,7 +299,7 @@ IMAP::_on_connected()
 
   auto resp = IMAPResponse{ &_stream };
   if (resp.untagged().size() != 1) {
-    _trig_error(E_UNEXPECTED, "Connect failed for unexpected response.");
+    _trig_error(E_UNEXPECTED, "Unexpected tagged response");
     return;
   }
 
@@ -307,7 +308,7 @@ IMAP::_on_connected()
   } else if (resp.untagged(0).type == "PREAUTH") {
     _status = S_AUTHENTICATE;
   } else {
-    _trig_error(E_UNEXPECTED, "Connect failed for unexpected response.");
+    _trig_error(E_UNEXPECTED, "Unexpected tagged response");
     return;
   }
 
@@ -347,7 +348,7 @@ IMAP::_on_ready_read()
 
   if (_last_cmd == LOGIN) {
     if (resp.tagged().size() != 1) {
-      _trig_error(E_UNEXPECTED, "Login failed for unexpected response.");
+      _trig_error(E_UNEXPECTED, "Unexpected tagged response");
       return;
     }
 
@@ -361,13 +362,18 @@ IMAP::_on_ready_read()
       return;
     }
 
-    _queue.enqueue(resp.tagged(0).data);
+    _queue.enqueue(QVariant::fromValue(response::Login{ resp.tagged(0).data }));
 
     _status = S_AUTHENTICATE;
     qDebug() << "IMAP4 Client: Login successfully.";
-  } else if (_last_cmd == LOGOUT) {
+
+    emit ready_read();
+    return;
+  }
+
+  if (_last_cmd == LOGOUT) {
     if (resp.tagged().size() != 1) {
-      _trig_error(E_UNEXPECTED, "Logout failed for unexpected response.");
+      _trig_error(E_UNEXPECTED, "Unexpected tagged response");
       return;
     }
 
@@ -380,7 +386,47 @@ IMAP::_on_ready_read()
     return;
   }
 
-  emit ready_read();
+  if (_last_cmd == LIST) {
+    if (resp.tagged().size() != 1) {
+      _trig_error(E_UNEXPECTED, "Unexpected tagged response");
+      return;
+    }
+
+    if (resp.tagged(0).type == NO) {
+      _trig_error(E_LOGINFAIL, resp.tagged(0).data);
+      return;
+    }
+
+    if (resp.tagged(0).type == BAD) {
+      _trig_error(E_BADCOMMAND, resp.tagged(0).data);
+      return;
+    }
+
+    auto list_resp = response::List{};
+
+    for (const auto& item : resp.untagged()) {
+      if (item.type != "LIST") {
+        qWarning() << "Failed to parse LIST response: unexpected type"
+                   << item.type;
+        continue;
+      }
+
+      auto parsed = LIST_REG.match(item.data);
+
+      if (!parsed.hasMatch()) {
+        qWarning()
+          << "Failed to parse LIST response: data do not match response pattern"
+          << item.data;
+        continue;
+      }
+
+      list_resp.emplace_back(parsed.captured("parent"),
+                             parsed.captured("name"));
+    }
+
+    _queue.enqueue(QVariant::fromValue(list_resp));
+    emit ready_read();
+  }
 }
 
 }

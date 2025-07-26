@@ -31,13 +31,13 @@ public:
    * @brief SSL option.
    *
    */
-  enum SslFlags : uint8_t
+  enum SslOption : uint8_t
   {
     NO_SSL, /**< Do not use SSL. */
     USE_SSL /**< Use SSL. */
   };
 
-  Q_ENUM(SslFlags)
+  Q_ENUM(SslOption)
 
   /**
    * @brief Client status types.
@@ -63,7 +63,7 @@ public:
     E_TCPINTERNAL,  /**< TCP error, always means that the connection is
                       unavailable. */
     E_UNEXPECTED,   /**< Unexpected status for unknown reason. */
-    E_LOGINFAIL,    /**< Fail to login for unknown reason. */
+    E_LOGINFAIL,    /**< Fail to login for any reason. */
     E_BADCOMMAND,   /**< IMAP invalid command or params mismatched. */
     E_NOTCONNECTED, /**< IMAP host not connected. */
   };
@@ -76,11 +76,10 @@ public:
    */
   enum ResponseType : uint8_t
   {
-    OK,      /**< OK response. */
-    NO,      /**< NO response. */
-    BAD,     /**< BAD response. */
-    BLANK,   /**< BLANK response. */
-    PREAUTH, /**< PREAUTH response. */
+    OK,    /**< OK response. */
+    NO,    /**< NO response. */
+    BAD,   /**< BAD response. */
+    BLANK, /**< BLANK response. */
   };
 
   Q_ENUM(ResponseType)
@@ -107,6 +106,11 @@ public:
   constexpr static int TIMEOUT_MSECS = 30000; /**< Default timeout. */
 
   constexpr static const char* CRLF = "\r\n"; /**< Crlf. */
+
+  inline static QRegularExpression LIST_REG{
+    R"REGEX(\((?P<attrs>[^)]+)\)\s+"(?P<parent>[^"]+)"\s+"(?P<name>[^"]+)")REGEX"
+  }; /**< Regex to parse LIST response such as (\XXX \XXX) "XXX" "XXX" into
+        (<attrs>) "<parent>" "<name>" */
 
 private:
   QSslSocket* _sock;
@@ -141,7 +145,7 @@ public:
    */
   void connect_to_host(const QString& url,
                        uint16_t port = 0,
-                       SslFlags ssl = USE_SSL);
+                       SslOption ssl = USE_SSL);
 
   /**
    * @brief Connect to IMAP4 host, will emit `connected` after connection
@@ -150,7 +154,7 @@ public:
    * @param url Remote url.
    * @param ssl SSL option.
    */
-  void connect_to_host(const QString& url, SslFlags ssl);
+  void connect_to_host(const QString& url, SslOption ssl);
 
   /**
    * @brief Disconnect from IMAP4 host.
