@@ -17,10 +17,4 @@ main(int argc, char** argv)
     qDebug() << client.error_string();
     return 1;
   }
-
-  client.disconnect_from_host();
-  if (!client.wait_for_disconnected()) {
-    qDebug() << client.error_string();
-    return 1;
-  }
 }

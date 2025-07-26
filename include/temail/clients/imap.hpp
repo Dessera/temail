@@ -4,11 +4,13 @@
 #include <memory>
 #include <qeventloop.h>
 #include <qobject.h>
+#include <qqueue.h>
 #include <qregularexpression.h>
 #include <qsslsocket.h>
 #include <qtextstream.h>
 #include <qtimer.h>
 #include <qtmetamacros.h>
+#include <qvariant.h>
 #include <utility>
 
 #include "temail/common.hpp"
@@ -58,11 +60,12 @@ public:
   {
     E_UNKNOWN, /**< Unknown error, means no error or some confusing errors. */
 
-    E_TCPINTERNAL,       /**< TCP error, always means that the connection is
-                           unavailable. */
-    E_UNEXPECTED_STATUS, /**< Unexpected status for unknown reason. */
-    E_BADPARAMS,         /**< IMAP params mismatched. */
-    E_LOGINFAIL,         /**< Fail to login. */
+    E_TCPINTERNAL,  /**< TCP error, always means that the connection is
+                      unavailable. */
+    E_UNEXPECTED,   /**< Unexpected status for unknown reason. */
+    E_LOGINFAIL,    /**< Fail to login for unknown reason. */
+    E_BADCOMMAND,   /**< IMAP invalid command or params mismatched. */
+    E_NOTCONNECTED, /**< IMAP host not connected. */
   };
 
   Q_ENUM(ErrorType)
@@ -108,6 +111,7 @@ public:
 private:
   QSslSocket* _sock;
   QTextStream _stream;
+  QQueue<QVariant> _queue;
 
   std::unique_ptr<TagGenerator> _tags{ nullptr };
 
@@ -226,12 +230,25 @@ public:
   void login(const QString& username, const QString& password);
 
   /**
+   * @brief Logout from IMAP4 server.
+   *
+   */
+  void logout();
+
+  /**
    * @brief List folders.
    *
    * @param path Parent path.
    * @param pattern Filter pattern.
    */
   void list(const QString& path, const QString& pattern);
+
+  /**
+   * @brief Read response.
+   *
+   * @return QVariant Response.
+   */
+  QVariant read();
 
 private:
   /**

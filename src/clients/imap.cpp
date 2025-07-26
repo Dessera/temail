@@ -3,12 +3,13 @@
 #include <qlist.h>
 #include <qlogging.h>
 #include <qmetaobject.h>
-#include <qpair.h>
 #include <qsslsocket.h>
 #include <qstring.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
+#include <utility>
 
+#include "qvariant.h"
 #include "temail/clients/imap.hpp"
 #include "temail/common.hpp"
 #include "temail/tag.hpp"
@@ -17,13 +18,43 @@ namespace temail::clients {
 
 namespace {
 
+/**
+ * @brief IMAP4 response parser.
+ *
+ */
 class IMAPResponse
 {
 public:
+  /**
+   * @brief IMAP4 response item (named pair).
+   *
+   * @tparam Te Key type.
+   */
+  template<typename Te>
+  struct Item
+  {
+    Te type;      // NOLINT
+    QString data; // NOLINT
+
+    Item(Te item_type, QString item_data)
+      : type{ std::move(item_type) }
+      , data{ std::move(item_data) }
+    {
+    }
+  };
+
+  /**
+   * @brief Regular expression to parse tagged response.
+   *
+   */
   inline static QRegularExpression TAGGED_REG{
     "(?P<tag>[A-Z]\\d+) (?P<type>[A-Z]+) (?P<data>.*)"
   };
 
+  /**
+   * @brief Regular expression to parse untagged response.
+   *
+   */
   inline static QRegularExpression UNTAGGED_REG{
     "\\* (?P<type>[A-Z-]+)( (?P<data>.*))?"
   };
@@ -31,8 +62,8 @@ public:
 private:
   QTextStream* _stream;
 
-  QList<QPair<IMAP::ResponseType, QString>> _tagged_response;
-  QList<QPair<IMAP::ResponseType, QString>> _untagged_response;
+  QList<Item<IMAP::ResponseType>> _tagged_response;
+  QList<Item<QString>> _untagged_response;
 
 public:
   IMAPResponse(QTextStream* stream)
@@ -75,9 +106,8 @@ private:
   void _handle_untagged(const QString& buffer)
   {
     if (auto parsed = UNTAGGED_REG.match(buffer); parsed.hasMatch()) {
-      _untagged_response.emplace_back(
-        _str_to_enum<IMAP::ResponseType>(parsed.captured("type")),
-        parsed.captured("data"));
+      _untagged_response.emplace_back(parsed.captured("type"),
+                                      parsed.captured("data"));
     }
   }
 
@@ -105,7 +135,7 @@ IMAP::IMAP(QObject* parent)
 IMAP::~IMAP()
 {
   if (is_connected()) {
-    disconnect_from_host();
+    logout();
     wait_for_disconnected();
   }
 }
@@ -196,13 +226,28 @@ IMAP::error_string() const
 void
 IMAP::login(const QString& username, const QString& password)
 {
+  if (_status == S_AUTHENTICATE) {
+    return;
+  }
+
   auto cmd = QString{ "%1 LOGIN %2 %3%4" }
                .arg(_tags->generate())
                .arg(username)
                .arg(password)
                .arg(CRLF);
-
   _send_command(LOGIN, cmd);
+}
+
+void
+IMAP::logout()
+{
+  if (_status == S_CONNECT) {
+    disconnect_from_host();
+    return;
+  }
+
+  auto cmd = QString{ "%1 LOGOUT%2" }.arg(_tags->generate()).arg(CRLF);
+  _send_command(LOGOUT, cmd);
 }
 
 void
@@ -217,9 +262,26 @@ IMAP::list(const QString& path, const QString& pattern)
   _send_command(LIST, cmd);
 }
 
+QVariant
+IMAP::read()
+{
+  if (_queue.size() == 0) {
+    qWarning() << "Failed to read from IMAP client: No response in queue.";
+    return {};
+  }
+
+  return _queue.dequeue();
+}
+
 void
 IMAP::_send_command(CommandType type, const QString& cmd)
 {
+  if (_status == S_DISCONNECT) {
+    _trig_error(E_NOTCONNECTED,
+                "Command is unreachable because server is not connected");
+    return;
+  }
+
   _last_cmd = type;
 
   _sock->write(cmd.toUtf8());
@@ -236,16 +298,16 @@ IMAP::_on_connected()
 
   auto resp = IMAPResponse{ &_stream };
   if (resp.untagged().size() != 1) {
-    _trig_error(E_TCPINTERNAL);
+    _trig_error(E_UNEXPECTED, "Connect failed for unexpected response.");
     return;
   }
 
-  if (resp.untagged(0).first == OK) {
+  if (resp.untagged(0).type == "OK") {
     _status = S_CONNECT;
-  } else if (resp.untagged(0).first == PREAUTH) {
+  } else if (resp.untagged(0).type == "PREAUTH") {
     _status = S_AUTHENTICATE;
   } else {
-    _trig_error(E_UNEXPECTED_STATUS, "Unexpected Status when connecting");
+    _trig_error(E_UNEXPECTED, "Connect failed for unexpected response.");
     return;
   }
 
@@ -261,7 +323,6 @@ IMAP::_on_connected()
 void
 IMAP::_on_disconnected()
 {
-
   disconnect(
     _sock, &QSslSocket::errorOccurred, this, &IMAP::_on_error_occurred);
   disconnect(_sock, &QSslSocket::readyRead, this, &IMAP::_on_ready_read);
@@ -286,16 +347,37 @@ IMAP::_on_ready_read()
 
   if (_last_cmd == LOGIN) {
     if (resp.tagged().size() != 1) {
-      _trig_error(E_LOGINFAIL, "Login failed for unexpected response.");
+      _trig_error(E_UNEXPECTED, "Login failed for unexpected response.");
       return;
     }
 
-    if (resp.tagged(0).first != OK) {
-      _trig_error(E_LOGINFAIL, resp.tagged(0).second);
+    if (resp.tagged(0).type == NO) {
+      _trig_error(E_LOGINFAIL, resp.tagged(0).data);
       return;
     }
 
+    if (resp.tagged(0).type == BAD) {
+      _trig_error(E_BADCOMMAND, resp.tagged(0).data);
+      return;
+    }
+
+    _queue.enqueue(resp.tagged(0).data);
+
+    _status = S_AUTHENTICATE;
     qDebug() << "IMAP4 Client: Login successfully.";
+  } else if (_last_cmd == LOGOUT) {
+    if (resp.tagged().size() != 1) {
+      _trig_error(E_UNEXPECTED, "Logout failed for unexpected response.");
+      return;
+    }
+
+    if (resp.tagged(0).type != OK) {
+      _trig_error(E_BADCOMMAND, resp.tagged(0).data);
+      return;
+    }
+
+    qDebug() << "IMAP4 Client: Logout successfully.";
+    return;
   }
 
   emit ready_read();
