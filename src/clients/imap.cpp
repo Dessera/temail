@@ -12,7 +12,6 @@
 #include <qvariant.h>
 #include <utility>
 
-#include "qcontainerfwd.h"
 #include "temail/clients/imap.hpp"
 #include "temail/clients/response.hpp"
 #include "temail/common.hpp"
@@ -344,16 +343,14 @@ IMAP::_handle_list()
 
   for (const auto& [type, data] : resp.untagged()) {
     if (type != "LIST") {
-      qWarning() << "Failed to parse LIST response: unexpected type" << type;
+      qWarning() << "Failed to parse LIST response: Unexpected type." << type;
       continue;
     }
 
     auto parsed = LIST_REG.match(data);
 
     if (!parsed.hasMatch()) {
-      qWarning()
-        << "Failed to parse LIST response: data do not match response pattern"
-        << data;
+      qWarning() << "Failed to parse LIST response: Unexpect format." << data;
       continue;
     }
 
@@ -393,7 +390,7 @@ IMAP::_handle_select() // NOLINT
     select_resp.permission = parsed.captured("type");
   } else {
     qWarning()
-      << "Failed to parse priority from SELECT response: unexpected format"
+      << "Failed to parse priority from SELECT response: Unexpected format."
       << resp.tagged(0).second;
   }
 
@@ -402,7 +399,7 @@ IMAP::_handle_select() // NOLINT
       bool ok = false;
       auto exists = item.first.toULongLong(&ok);
       if (!ok) {
-        qWarning() << "Failed to parse SELECT EXISTS response: not a number";
+        qWarning() << "Failed to parse SELECT EXISTS response: Not a number.";
         continue;
       }
       select_resp.exists = exists;
@@ -413,7 +410,7 @@ IMAP::_handle_select() // NOLINT
       bool ok = false;
       auto recent = item.first.toULongLong(&ok);
       if (!ok) {
-        qWarning() << "Failed to parse SELECT RECENT response: not a number";
+        qWarning() << "Failed to parse SELECT RECENT response: Not a number.";
         continue;
       }
       select_resp.recent = recent;
@@ -431,7 +428,7 @@ IMAP::_handle_select() // NOLINT
         bool ok = false;
         auto unseen = parsed.captured("data").toULongLong(&ok);
         if (!ok) {
-          qWarning() << "Failed to parse SELECT UNSEEN response: not a number";
+          qWarning() << "Failed to parse SELECT UNSEEN response: Not a number.";
           continue;
         }
         select_resp.unseen = unseen;
@@ -444,7 +441,7 @@ IMAP::_handle_select() // NOLINT
         auto uidvalidity = parsed.captured("data").toULongLong(&ok);
         if (!ok) {
           qWarning()
-            << "Failed to parse SELECT UIDVALIDITY response: not a number";
+            << "Failed to parse SELECT UIDVALIDITY response: Not a number.";
           continue;
         }
         select_resp.uidvalidity = uidvalidity;

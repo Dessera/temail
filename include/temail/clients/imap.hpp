@@ -328,11 +328,36 @@ private:
    */
   void _send_command(CommandType type, const QString& cmd);
 
+  /**
+   * @brief Handles LOGIN response.
+   *
+   */
   void _handle_login();
+
+  /**
+   * @brief Handles LOGOUT response.
+   *
+   */
   void _handle_logout();
+
+  /**
+   * @brief Handles LIST response.
+   *
+   */
   void _handle_list();
+
+  /**
+   * @brief Handles SELECT response.
+   *
+   */
   void _handle_select();
 
+  /**
+   * @brief Parse attrs to attr list.
+   *
+   * @param attrs_str Attrs such as "\XXX \YYY".
+   * @return QStringList Attr list.
+   */
   QStringList _parse_attrs(const QString& attrs_str);
 
 signals:
