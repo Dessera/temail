@@ -7,12 +7,12 @@
 #include <qqueue.h>
 #include <qregularexpression.h>
 #include <qsslsocket.h>
-#include <qtextstream.h>
 #include <qtimer.h>
 #include <qtmetamacros.h>
 #include <qvariant.h>
 #include <utility>
 
+#include "qcontainerfwd.h"
 #include "temail/common.hpp"
 #include "temail/tag.hpp"
 
@@ -94,6 +94,7 @@ public:
     LOGIN,  /**< LOGIN command. */
     LOGOUT, /**< LOGOUT command. */
     LIST,   /**< LIST command. */
+    SELECT, /**< SELECT command. */
   };
 
   Q_ENUM(CommandType)
@@ -107,20 +108,30 @@ public:
 
   constexpr static const char* CRLF = "\r\n"; /**< Crlf. */
 
-  inline static QRegularExpression LIST_REG{
-    R"REGEX(\((?P<attrs>[^)]+)\)\s+"(?P<parent>[^"]+)"\s+"(?P<name>[^"]+)")REGEX"
+  inline static const QRegularExpression LIST_REG{
+    R"REGEX(\((?P<attrs>[^)]+)\) "(?P<parent>[^"]+)" "(?P<name>[^"]+)")REGEX"
   }; /**< Regex to parse LIST response such as (\XXX \XXX) "XXX" "XXX" into
         (<attrs>) "<parent>" "<name>" */
 
+  inline static const QRegularExpression ATTRS_REG{
+    R"REGEX(\((?P<attrs>[^)]+)\))REGEX"
+  }; /**< Regex to parse attrs such as (\XXX \XXX) into (<attrs>) */
+
+  inline static const QRegularExpression SELECT_BRACKET_REG{
+    R"REGEX(\[(?P<type>[A-Z-]+)( (\()?(?P<data>.*)(\))?)?\])REGEX"
+  }; /**< Regex to parse bracket response such as [XXX XXX] XXX, [XXX] XXX or
+        [XXX (\XXX \XXX)] XXX into [<type> <data>] XXX, [<type>] XXX or [<type>
+        (<data>)] XXX */
+
 private:
   QSslSocket* _sock;
-  QTextStream _stream;
   QQueue<QVariant> _queue;
 
   std::unique_ptr<TagGenerator> _tags{ nullptr };
 
   Status _status{ S_DISCONNECT };
   CommandType _last_cmd{ NOOP };
+  QString _last_tag;
 
   ErrorType _error{ E_UNKNOWN };
   QString _estr;
@@ -248,6 +259,13 @@ public:
   void list(const QString& path, const QString& pattern);
 
   /**
+   * @brief Select folder.
+   *
+   * @param path Folder path.
+   */
+  void select(const QString& path);
+
+  /**
    * @brief Read response.
    *
    * @return QVariant Response.
@@ -309,6 +327,13 @@ private:
    * @param cmd Command content.
    */
   void _send_command(CommandType type, const QString& cmd);
+
+  void _handle_login();
+  void _handle_logout();
+  void _handle_list();
+  void _handle_select();
+
+  QStringList _parse_attrs(const QString& attrs_str);
 
 signals:
   /**

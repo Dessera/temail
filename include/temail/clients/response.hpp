@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <qlist.h>
 #include <qstring.h>
@@ -7,43 +8,46 @@
 #include <qvariant.h>
 #include <utility>
 
-#include "temail/common.hpp"
-
 namespace temail::clients::response {
 
-class TEMAIL_PUBLIC Login
+/**
+ * @brief LOGIN response.
+ *
+ */
+struct Login
 {
-private:
-  QString _msg;
-
-public:
-  explicit Login(QString msg)
-    : _msg{ std::move(msg) }
-  {
-  }
-
-  [[nodiscard]] TEMAIL_INLINE auto& message() const { return _msg; }
+  QString message;
 };
 
-class TEMAIL_PUBLIC ListItem
+/**
+ * @brief LIST response item.
+ *
+ */
+struct ListItem
 {
-private:
-  QString _parent;
-  QString _name;
-
-public:
-  ListItem(QString parent, QString name)
-    : _parent{ std::move(parent) }
-    , _name{ std::move(name) }
-  {
-  }
-  [[nodiscard]] TEMAIL_INLINE auto& parent() const { return _parent; }
-
-  [[nodiscard]] TEMAIL_INLINE auto& name() const { return _name; }
+  QString parent;
+  QString name;
+  QStringList attrs;
 };
 
+/**
+ * @brief LIST response.
+ *
+ */
 using List = QList<ListItem>;
+
+struct Select
+{
+  std::size_t exists{ 0 };
+  std::size_t recent{ 0 };
+  std::size_t unseen{ 0 };
+  std::size_t uidvalidity{ 0 };
+  QStringList flags;
+  QStringList permanent_flags;
+  QString permission;
+};
 
 }
 
 Q_DECLARE_METATYPE(temail::clients::response::Login)
+Q_DECLARE_METATYPE(temail::clients::response::Select)

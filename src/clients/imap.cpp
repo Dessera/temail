@@ -1,8 +1,10 @@
 #include <cstdint>
+#include <qbytearray.h>
 #include <qdebug.h>
 #include <qlist.h>
 #include <qlogging.h>
 #include <qmetaobject.h>
+#include <qpair.h>
 #include <qsslsocket.h>
 #include <qstring.h>
 #include <qtmetamacros.h>
@@ -10,6 +12,7 @@
 #include <qvariant.h>
 #include <utility>
 
+#include "qcontainerfwd.h"
 #include "temail/clients/imap.hpp"
 #include "temail/clients/response.hpp"
 #include "temail/common.hpp"
@@ -26,54 +29,40 @@ namespace {
 class IMAPResponse
 {
 public:
-  /**
-   * @brief IMAP4 response item (named pair).
-   *
-   * @tparam Te Key type.
-   */
-  template<typename Te>
-  struct Item
-  {
-    Te type;      // NOLINT
-    QString data; // NOLINT
-
-    Item(Te item_type, QString item_data)
-      : type{ std::move(item_type) }
-      , data{ std::move(item_data) }
-    {
-    }
-  };
-
-  /**
-   * @brief Regular expression to parse tagged response.
-   *
-   */
   inline static QRegularExpression TAGGED_REG{
     "(?P<tag>[A-Z]\\d+) (?P<type>[A-Z]+) (?P<data>.*)"
-  };
+  }; /**< Regular expression to parse tagged response. */
 
-  /**
-   * @brief Regular expression to parse untagged response.
-   *
-   */
   inline static QRegularExpression UNTAGGED_REG{
-    "\\* (?P<type>[A-Z-]+)( (?P<data>.*))?"
-  };
+    "\\* (?P<type>[0-9A-Z-]+)( (?P<data>.*))?"
+  }; /**< Regular expression to parse untagged response. */
 
 private:
-  QTextStream* _stream;
+  QSslSocket* _sock;
 
-  QList<Item<IMAP::ResponseType>> _tagged_response;
-  QList<Item<QString>> _untagged_response;
+  QList<QPair<IMAP::ResponseType, QString>> _tagged_response;
+  QList<QPair<QString, QString>> _untagged_response;
+  QByteArray _raw_response;
 
 public:
-  IMAPResponse(QTextStream* stream)
-    : _stream{ stream }
+  IMAPResponse(QSslSocket* sock, const QString& tag)
+    : _sock{ sock }
   {
-    auto buffer = QString{};
-    while (_stream->readLineInto(&buffer)) {
-      _handle_tagged(buffer);
-      _handle_untagged(buffer);
+    while (true) {
+      auto buffer = _sock->readLine();
+      if (buffer.isEmpty()) {
+        break;
+      }
+
+      if (buffer.startsWith('*')) {
+        _handle_untagged(buffer.trimmed());
+        continue;
+      }
+
+      if (buffer.startsWith(tag.toLocal8Bit())) {
+        _handle_tagged(buffer.trimmed());
+        continue;
+      }
     }
   }
 
@@ -125,10 +114,7 @@ private:
 IMAP::IMAP(QObject* parent)
   : QObject{ parent }
   , _sock{ new QSslSocket{ this } }
-  , _stream{ _sock }
 {
-  _stream.setEncoding(QStringConverter::Utf8);
-
   connect(_sock, &QSslSocket::connected, this, &IMAP::_on_connected);
   connect(_sock, &QSslSocket::disconnected, this, &IMAP::_on_disconnected);
 }
@@ -231,11 +217,7 @@ IMAP::login(const QString& username, const QString& password)
     return;
   }
 
-  auto cmd = QString{ "%1 LOGIN %2 %3%4" }
-               .arg(_tags->generate())
-               .arg(username)
-               .arg(password)
-               .arg(CRLF);
+  auto cmd = QString{ "LOGIN %1 %2" }.arg(username).arg(password);
   _send_command(LOGIN, cmd);
 }
 
@@ -247,20 +229,22 @@ IMAP::logout()
     return;
   }
 
-  auto cmd = QString{ "%1 LOGOUT%2" }.arg(_tags->generate()).arg(CRLF);
+  auto cmd = QString{ "LOGOUT" };
   _send_command(LOGOUT, cmd);
 }
 
 void
 IMAP::list(const QString& path, const QString& pattern)
 {
-  auto cmd = QString{ "%1 LIST %2 %3%4" }
-               .arg(_tags->generate())
-               .arg(path)
-               .arg(pattern)
-               .arg(CRLF);
-
+  auto cmd = QString{ "LIST %2 %3" }.arg(path).arg(pattern);
   _send_command(LIST, cmd);
+}
+
+void
+IMAP::select(const QString& path)
+{
+  auto cmd = QString{ "SELECT %2" }.arg(path);
+  _send_command(SELECT, cmd);
 }
 
 QVariant
@@ -284,9 +268,212 @@ IMAP::_send_command(CommandType type, const QString& cmd)
   }
 
   _last_cmd = type;
+  _last_tag = _tags->generate();
 
-  _sock->write(cmd.toUtf8());
+  _sock->write(QString{ "%1 %2%3" }.arg(_last_tag).arg(cmd).arg(CRLF).toUtf8());
   _sock->flush();
+}
+
+void
+IMAP::_handle_login()
+{
+  auto resp = IMAPResponse{ _sock, _last_tag };
+
+  if (resp.tagged().size() != 1) {
+    _trig_error(E_UNEXPECTED, "Unexpected tagged response");
+    return;
+  }
+
+  if (resp.tagged(0).first == NO) {
+    _trig_error(E_LOGINFAIL, resp.tagged(0).second);
+    return;
+  }
+
+  if (resp.tagged(0).first == BAD) {
+    _trig_error(E_BADCOMMAND, resp.tagged(0).second);
+    return;
+  }
+
+  _queue.enqueue(QVariant::fromValue(response::Login{ resp.tagged(0).second }));
+
+  _status = S_AUTHENTICATE;
+  qDebug() << "IMAP4 Client: Login successfully.";
+
+  emit ready_read();
+}
+
+void
+IMAP::_handle_logout()
+{
+  auto resp = IMAPResponse{ _sock, _last_tag };
+
+  if (resp.tagged().size() != 1) {
+    _trig_error(E_UNEXPECTED, "Unexpected tagged response");
+    return;
+  }
+
+  if (resp.tagged(0).first != OK) {
+    _trig_error(E_BADCOMMAND, resp.tagged(0).second);
+    return;
+  }
+
+  qDebug() << "IMAP4 Client: Logout successfully.";
+}
+
+void
+IMAP::_handle_list()
+{
+  auto resp = IMAPResponse{ _sock, _last_tag };
+
+  if (resp.tagged().size() != 1) {
+    _trig_error(E_UNEXPECTED, "Unexpected tagged response");
+    return;
+  }
+
+  if (resp.tagged(0).first == NO) {
+    _trig_error(E_LOGINFAIL, resp.tagged(0).second);
+    return;
+  }
+
+  if (resp.tagged(0).first == BAD) {
+    _trig_error(E_BADCOMMAND, resp.tagged(0).second);
+    return;
+  }
+
+  auto list_resp = response::List{};
+
+  for (const auto& [type, data] : resp.untagged()) {
+    if (type != "LIST") {
+      qWarning() << "Failed to parse LIST response: unexpected type" << type;
+      continue;
+    }
+
+    auto parsed = LIST_REG.match(data);
+
+    if (!parsed.hasMatch()) {
+      qWarning()
+        << "Failed to parse LIST response: data do not match response pattern"
+        << data;
+      continue;
+    }
+
+    list_resp.push_back({ parsed.captured("parent"),
+                          parsed.captured("name"),
+                          _parse_attrs(parsed.captured("attrs")) });
+  }
+
+  _queue.enqueue(QVariant::fromValue(list_resp));
+  emit ready_read();
+}
+
+void
+IMAP::_handle_select() // NOLINT
+{
+  auto resp = IMAPResponse{ _sock, _last_tag };
+
+  if (resp.tagged().size() != 1) {
+    _trig_error(E_UNEXPECTED, "Unexpected tagged response");
+    return;
+  }
+
+  if (resp.tagged(0).first == NO) {
+    _trig_error(E_LOGINFAIL, resp.tagged(0).second);
+    return;
+  }
+
+  if (resp.tagged(0).first == BAD) {
+    _trig_error(E_BADCOMMAND, resp.tagged(0).second);
+    return;
+  }
+
+  auto select_resp = response::Select{};
+
+  if (auto parsed = SELECT_BRACKET_REG.match(resp.tagged(0).second);
+      parsed.hasMatch()) {
+    select_resp.permission = parsed.captured("type");
+  } else {
+    qWarning()
+      << "Failed to parse priority from SELECT response: unexpected format"
+      << resp.tagged(0).second;
+  }
+
+  for (const auto& item : resp.untagged()) {
+    if (item.second == "EXISTS") {
+      bool ok = false;
+      auto exists = item.first.toULongLong(&ok);
+      if (!ok) {
+        qWarning() << "Failed to parse SELECT EXISTS response: not a number";
+        continue;
+      }
+      select_resp.exists = exists;
+      continue;
+    }
+
+    if (item.second == "RECENT") {
+      bool ok = false;
+      auto recent = item.first.toULongLong(&ok);
+      if (!ok) {
+        qWarning() << "Failed to parse SELECT RECENT response: not a number";
+        continue;
+      }
+      select_resp.recent = recent;
+      continue;
+    }
+
+    if (auto parsed = ATTRS_REG.match(item.second);
+        item.first == "FLAGS" && parsed.hasMatch()) {
+      select_resp.flags = _parse_attrs(parsed.captured("attrs"));
+    }
+
+    if (auto parsed = SELECT_BRACKET_REG.match(item.second);
+        item.first == "OK" && parsed.hasMatch()) {
+      if (parsed.captured("type") == "UNSEEN" && parsed.hasCaptured("data")) {
+        bool ok = false;
+        auto unseen = parsed.captured("data").toULongLong(&ok);
+        if (!ok) {
+          qWarning() << "Failed to parse SELECT UNSEEN response: not a number";
+          continue;
+        }
+        select_resp.unseen = unseen;
+        continue;
+      }
+
+      if (parsed.captured("type") == "UIDVALIDITY" &&
+          parsed.hasCaptured("data")) {
+        bool ok = false;
+        auto uidvalidity = parsed.captured("data").toULongLong(&ok);
+        if (!ok) {
+          qWarning()
+            << "Failed to parse SELECT UIDVALIDITY response: not a number";
+          continue;
+        }
+        select_resp.uidvalidity = uidvalidity;
+        continue;
+      }
+
+      if (parsed.captured("type") == "PERMANENTFLAGS" &&
+          parsed.hasCaptured("data")) {
+        select_resp.permanent_flags = _parse_attrs(parsed.captured("data"));
+      }
+    }
+  }
+
+  _queue.enqueue(QVariant::fromValue(std::move(select_resp)));
+  emit ready_read();
+}
+
+QStringList
+IMAP::_parse_attrs(const QString& attrs_str)
+{
+  auto attrs = attrs_str.split(' ', Qt::SkipEmptyParts);
+
+  for (auto& item : attrs) {
+    if (item.front() == '\\') {
+      item.erase(item.begin());
+    }
+  }
+
+  return attrs;
 }
 
 void
@@ -297,15 +484,15 @@ IMAP::_on_connected()
     return;
   }
 
-  auto resp = IMAPResponse{ &_stream };
+  auto resp = IMAPResponse{ _sock, "A000" };
   if (resp.untagged().size() != 1) {
     _trig_error(E_UNEXPECTED, "Unexpected tagged response");
     return;
   }
 
-  if (resp.untagged(0).type == "OK") {
+  if (resp.untagged(0).first == "OK") {
     _status = S_CONNECT;
-  } else if (resp.untagged(0).type == "PREAUTH") {
+  } else if (resp.untagged(0).first == "PREAUTH") {
     _status = S_AUTHENTICATE;
   } else {
     _trig_error(E_UNEXPECTED, "Unexpected tagged response");
@@ -344,88 +531,24 @@ IMAP::_on_error_occurred(QSslSocket::SocketError /*error*/)
 void
 IMAP::_on_ready_read()
 {
-  auto resp = IMAPResponse{ &_stream };
-
   if (_last_cmd == LOGIN) {
-    if (resp.tagged().size() != 1) {
-      _trig_error(E_UNEXPECTED, "Unexpected tagged response");
-      return;
-    }
-
-    if (resp.tagged(0).type == NO) {
-      _trig_error(E_LOGINFAIL, resp.tagged(0).data);
-      return;
-    }
-
-    if (resp.tagged(0).type == BAD) {
-      _trig_error(E_BADCOMMAND, resp.tagged(0).data);
-      return;
-    }
-
-    _queue.enqueue(QVariant::fromValue(response::Login{ resp.tagged(0).data }));
-
-    _status = S_AUTHENTICATE;
-    qDebug() << "IMAP4 Client: Login successfully.";
-
-    emit ready_read();
+    _handle_login();
     return;
   }
 
   if (_last_cmd == LOGOUT) {
-    if (resp.tagged().size() != 1) {
-      _trig_error(E_UNEXPECTED, "Unexpected tagged response");
-      return;
-    }
-
-    if (resp.tagged(0).type != OK) {
-      _trig_error(E_BADCOMMAND, resp.tagged(0).data);
-      return;
-    }
-
-    qDebug() << "IMAP4 Client: Logout successfully.";
+    _handle_logout();
     return;
   }
 
   if (_last_cmd == LIST) {
-    if (resp.tagged().size() != 1) {
-      _trig_error(E_UNEXPECTED, "Unexpected tagged response");
-      return;
-    }
+    _handle_list();
+    return;
+  }
 
-    if (resp.tagged(0).type == NO) {
-      _trig_error(E_LOGINFAIL, resp.tagged(0).data);
-      return;
-    }
-
-    if (resp.tagged(0).type == BAD) {
-      _trig_error(E_BADCOMMAND, resp.tagged(0).data);
-      return;
-    }
-
-    auto list_resp = response::List{};
-
-    for (const auto& item : resp.untagged()) {
-      if (item.type != "LIST") {
-        qWarning() << "Failed to parse LIST response: unexpected type"
-                   << item.type;
-        continue;
-      }
-
-      auto parsed = LIST_REG.match(item.data);
-
-      if (!parsed.hasMatch()) {
-        qWarning()
-          << "Failed to parse LIST response: data do not match response pattern"
-          << item.data;
-        continue;
-      }
-
-      list_resp.emplace_back(parsed.captured("parent"),
-                             parsed.captured("name"));
-    }
-
-    _queue.enqueue(QVariant::fromValue(list_resp));
-    emit ready_read();
+  if (_last_cmd == SELECT) {
+    _handle_select();
+    return;
   }
 }
 
