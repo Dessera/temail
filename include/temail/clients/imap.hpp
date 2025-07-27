@@ -118,7 +118,7 @@ public:
   }; /**< Regex to parse attrs such as (\XXX \XXX) into (<attrs>) */
 
   inline static const QRegularExpression SELECT_BRACKET_REG{
-    R"REGEX(\[(?P<type>[A-Z-]+)( (\()?(?P<data>.*)(\))?)?\])REGEX"
+    R"REGEX(\[(?P<type>[A-Z-]+)( (\()?(?P<data>[^)]+)(\))?)?\])REGEX"
   }; /**< Regex to parse bracket response such as [XXX XXX] XXX, [XXX] XXX or
         [XXX (\XXX \XXX)] XXX into [<type> <data>] XXX, [<type>] XXX or [<type>
         (<data>)] XXX */
