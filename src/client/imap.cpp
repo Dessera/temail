@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <cstdint>
 #include <qbytearray.h>
 #include <qdebug.h>
@@ -12,12 +13,12 @@
 #include <qvariant.h>
 #include <utility>
 
-#include "temail/clients/imap.hpp"
-#include "temail/clients/response.hpp"
-#include "temail/common.hpp"
+#include "temail/client/imap.hpp"
+#include "temail/client/request.hpp"
+#include "temail/client/response.hpp"
 #include "temail/tag.hpp"
 
-namespace temail::clients {
+namespace temail::client {
 
 namespace {
 
@@ -27,23 +28,27 @@ namespace {
  */
 class IMAPResponse
 {
-public:
+private:
   inline static QRegularExpression TAGGED_REG{
     "(?P<tag>[A-Z]\\d+) (?P<type>[A-Z]+) (?P<data>.*)"
-  }; /**< Regular expression to parse tagged response. */
+  }; /**< Regex to parse tagged response. */
 
   inline static QRegularExpression UNTAGGED_REG{
-    "\\* (?P<type>[0-9A-Z-]+)( (?P<data>.*))?"
-  }; /**< Regular expression to parse untagged response. */
+    "\\* (?P<type>[A-Z-]+)( (?P<data>.*))?"
+  }; /**< Regex to parse untagged response. */
 
-private:
+  inline static QRegularExpression UNTAGGED_TRAILING_REG{
+    "\\* (?P<data>.*) (?P<type>[A-Z-]+)"
+  }; /**< Regex to parse untagged response. */
+
   QSslSocket* _sock;
 
-  QList<QPair<IMAP::ResponseType, QString>> _tagged_response;
-  QList<QPair<QString, QString>> _untagged_response;
-  QByteArray _raw_response;
-
 public:
+  QList<QPair<IMAP::Response, QString>> tagged;            // NOLINT
+  QList<QPair<IMAP::Response, QString>> untagged;          // NOLINT
+  QList<QPair<IMAP::Response, QString>> untagged_trailing; // NOLINT
+  bool continuation;                                       // NOLINT
+
   IMAPResponse(QSslSocket* sock, const QString& tag)
     : _sock{ sock }
   {
@@ -62,41 +67,37 @@ public:
         _handle_tagged(buffer.trimmed());
         continue;
       }
+
+      if (buffer.startsWith("+")) {
+        continuation = true;
+        continue;
+      }
     }
-  }
-
-  [[nodiscard]] TEMAIL_INLINE auto& tagged() const { return _tagged_response; }
-
-  [[nodiscard]] TEMAIL_INLINE auto& tagged(qsizetype index) const
-  {
-    return _tagged_response[index];
-  }
-
-  [[nodiscard]] TEMAIL_INLINE auto& untagged() const
-  {
-    return _untagged_response;
-  }
-
-  [[nodiscard]] TEMAIL_INLINE auto& untagged(qsizetype index) const
-  {
-    return _untagged_response[index];
   }
 
 private:
   void _handle_tagged(const QString& buffer)
   {
     if (auto parsed = TAGGED_REG.match(buffer); parsed.hasMatch()) {
-      _tagged_response.emplace_back(
-        _str_to_enum<IMAP::ResponseType>(parsed.captured("type")),
-        parsed.captured("data"));
+      tagged.emplace_back(_str_to_enum<IMAP::Response>(parsed.captured("type")),
+                          parsed.captured("data"));
     }
   }
 
   void _handle_untagged(const QString& buffer)
   {
     if (auto parsed = UNTAGGED_REG.match(buffer); parsed.hasMatch()) {
-      _untagged_response.emplace_back(parsed.captured("type"),
-                                      parsed.captured("data"));
+      untagged.emplace_back(
+        _str_to_enum<IMAP::Response>(parsed.captured("type")),
+        parsed.captured("data"));
+      return;
+    }
+
+    if (auto parsed = UNTAGGED_TRAILING_REG.match(buffer); parsed.hasMatch()) {
+      untagged_trailing.emplace_back(
+        _str_to_enum<IMAP::Response>(parsed.captured("type")),
+        parsed.captured("data"));
+      return;
     }
   }
 
@@ -217,7 +218,7 @@ IMAP::login(const QString& username, const QString& password)
   }
 
   auto cmd = QString{ "LOGIN %1 %2" }.arg(username).arg(password);
-  _send_command(LOGIN, cmd);
+  _send_command(Command::LOGIN, cmd);
 }
 
 void
@@ -229,21 +230,35 @@ IMAP::logout()
   }
 
   auto cmd = QString{ "LOGOUT" };
-  _send_command(LOGOUT, cmd);
+  _send_command(Command::LOGOUT, cmd);
 }
 
 void
 IMAP::list(const QString& path, const QString& pattern)
 {
   auto cmd = QString{ "LIST %2 %3" }.arg(path).arg(pattern);
-  _send_command(LIST, cmd);
+  _send_command(Command::LIST, cmd);
 }
 
 void
 IMAP::select(const QString& path)
 {
   auto cmd = QString{ "SELECT %2" }.arg(path);
-  _send_command(SELECT, cmd);
+  _send_command(Command::SELECT, cmd);
+}
+
+void
+IMAP::noop()
+{
+  _send_command(Command::NOOP, "NOOP");
+}
+
+void
+IMAP::search(request::Search::Criteria criteria)
+{
+  auto enum_meta = QMetaEnum::fromType<request::Search::Criteria>();
+  auto cmd = QString{ "SEARCH %1" }.arg(enum_meta.valueToKey(criteria));
+  _send_command(Command::SEARCH, cmd);
 }
 
 QVariant
@@ -258,7 +273,7 @@ IMAP::read()
 }
 
 void
-IMAP::_send_command(CommandType type, const QString& cmd)
+IMAP::_send_command(Command type, const QString& cmd)
 {
   if (_status == S_DISCONNECT) {
     _trig_error(E_NOTCONNECTED,
@@ -278,22 +293,22 @@ IMAP::_handle_login()
 {
   auto resp = IMAPResponse{ _sock, _last_tag };
 
-  if (resp.tagged().size() != 1) {
+  if (resp.tagged.size() != 1) {
     _trig_error(E_UNEXPECTED, "Unexpected tagged response");
     return;
   }
 
-  if (resp.tagged(0).first == NO) {
-    _trig_error(E_LOGINFAIL, resp.tagged(0).second);
+  if (resp.tagged[0].first == Response::NO) {
+    _trig_error(E_LOGIN, resp.tagged[0].second);
     return;
   }
 
-  if (resp.tagged(0).first == BAD) {
-    _trig_error(E_BADCOMMAND, resp.tagged(0).second);
+  if (resp.tagged[0].first == Response::BAD) {
+    _trig_error(E_BADCOMMAND, resp.tagged[0].second);
     return;
   }
 
-  _queue.enqueue(QVariant::fromValue(response::Login{ resp.tagged(0).second }));
+  _queue.enqueue(QVariant::fromValue(response::Login{}));
 
   _status = S_AUTHENTICATE;
   qDebug() << "IMAP4 Client: Login successfully.";
@@ -306,13 +321,13 @@ IMAP::_handle_logout()
 {
   auto resp = IMAPResponse{ _sock, _last_tag };
 
-  if (resp.tagged().size() != 1) {
+  if (resp.tagged.size() != 1) {
     _trig_error(E_UNEXPECTED, "Unexpected tagged response");
     return;
   }
 
-  if (resp.tagged(0).first != OK) {
-    _trig_error(E_BADCOMMAND, resp.tagged(0).second);
+  if (resp.tagged[0].first != Response::OK) {
+    _trig_error(E_BADCOMMAND, resp.tagged[0].second);
     return;
   }
 
@@ -324,25 +339,25 @@ IMAP::_handle_list()
 {
   auto resp = IMAPResponse{ _sock, _last_tag };
 
-  if (resp.tagged().size() != 1) {
+  if (resp.tagged.size() != 1) {
     _trig_error(E_UNEXPECTED, "Unexpected tagged response");
     return;
   }
 
-  if (resp.tagged(0).first == NO) {
-    _trig_error(E_LOGINFAIL, resp.tagged(0).second);
+  if (resp.tagged[0].first == Response::NO) {
+    _trig_error(E_REFERENCE, resp.tagged[0].second);
     return;
   }
 
-  if (resp.tagged(0).first == BAD) {
-    _trig_error(E_BADCOMMAND, resp.tagged(0).second);
+  if (resp.tagged[0].first == Response::BAD) {
+    _trig_error(E_BADCOMMAND, resp.tagged[0].second);
     return;
   }
 
   auto list_resp = response::List{};
 
-  for (const auto& [type, data] : resp.untagged()) {
-    if (type != "LIST") {
+  for (const auto& [type, data] : resp.untagged) {
+    if (type != Response::LIST) {
       qWarning() << "Failed to parse LIST response: Unexpected type." << type;
       continue;
     }
@@ -368,36 +383,36 @@ IMAP::_handle_select() // NOLINT
 {
   auto resp = IMAPResponse{ _sock, _last_tag };
 
-  if (resp.tagged().size() != 1) {
+  if (resp.tagged.size() != 1) {
     _trig_error(E_UNEXPECTED, "Unexpected tagged response");
     return;
   }
 
-  if (resp.tagged(0).first == NO) {
-    _trig_error(E_LOGINFAIL, resp.tagged(0).second);
+  if (resp.tagged[0].first == Response::NO) {
+    _trig_error(E_REFERENCE, resp.tagged[0].second);
     return;
   }
 
-  if (resp.tagged(0).first == BAD) {
-    _trig_error(E_BADCOMMAND, resp.tagged(0).second);
+  if (resp.tagged[0].first == Response::BAD) {
+    _trig_error(E_BADCOMMAND, resp.tagged[0].second);
     return;
   }
 
   auto select_resp = response::Select{};
 
-  if (auto parsed = SELECT_BRACKET_REG.match(resp.tagged(0).second);
+  if (auto parsed = SELECT_BRACKET_REG.match(resp.tagged[0].second);
       parsed.hasMatch()) {
     select_resp.permission = parsed.captured("type");
   } else {
     qWarning()
       << "Failed to parse priority from SELECT response: Unexpected format."
-      << resp.tagged(0).second;
+      << resp.tagged[0].second;
   }
 
-  for (const auto& item : resp.untagged()) {
-    if (item.second == "EXISTS") {
+  for (const auto& item : resp.untagged_trailing) {
+    if (item.first == Response::EXISTS) {
       bool ok = false;
-      auto exists = item.first.toULongLong(&ok);
+      auto exists = item.second.toULongLong(&ok);
       if (!ok) {
         qWarning() << "Failed to parse SELECT EXISTS response: Not a number.";
         continue;
@@ -406,9 +421,9 @@ IMAP::_handle_select() // NOLINT
       continue;
     }
 
-    if (item.second == "RECENT") {
+    if (item.first == Response::RECENT) {
       bool ok = false;
-      auto recent = item.first.toULongLong(&ok);
+      auto recent = item.second.toULongLong(&ok);
       if (!ok) {
         qWarning() << "Failed to parse SELECT RECENT response: Not a number.";
         continue;
@@ -416,14 +431,16 @@ IMAP::_handle_select() // NOLINT
       select_resp.recent = recent;
       continue;
     }
+  }
 
+  for (const auto& item : resp.untagged) {
     if (auto parsed = ATTRS_REG.match(item.second);
-        item.first == "FLAGS" && parsed.hasMatch()) {
+        item.first == Response::FLAGS && parsed.hasMatch()) {
       select_resp.flags = _parse_attrs(parsed.captured("attrs"));
     }
 
     if (auto parsed = SELECT_BRACKET_REG.match(item.second);
-        item.first == "OK" && parsed.hasMatch()) {
+        item.first == Response::OK && parsed.hasMatch()) {
       if (parsed.captured("type") == "UNSEEN" && parsed.hasCaptured("data")) {
         bool ok = false;
         auto unseen = parsed.captured("data").toULongLong(&ok);
@@ -459,6 +476,66 @@ IMAP::_handle_select() // NOLINT
   emit ready_read();
 }
 
+void
+IMAP::_handle_noop()
+{
+  auto resp = IMAPResponse{ _sock, _last_tag };
+
+  if (resp.tagged.size() != 1) {
+    _trig_error(E_UNEXPECTED, "Unexpected tagged response");
+    return;
+  }
+
+  if (resp.tagged[0].first != Response::OK) {
+    _trig_error(E_BADCOMMAND, resp.tagged[0].second);
+    return;
+  }
+
+  _queue.enqueue(QVariant::fromValue(response::Noop{}));
+  emit ready_read();
+}
+
+void
+IMAP::_handle_search()
+{
+  auto resp = IMAPResponse{ _sock, _last_tag };
+
+  if (resp.tagged.size() != 1) {
+    _trig_error(E_UNEXPECTED, "Unexpected tagged response");
+    return;
+  }
+
+  if (resp.tagged[0].first == Response::NO) {
+    _trig_error(E_REFERENCE, resp.tagged[0].second);
+    return;
+  }
+
+  if (resp.tagged[0].first == Response::BAD) {
+    _trig_error(E_BADCOMMAND, resp.tagged[0].second);
+    return;
+  }
+
+  if (resp.untagged.size() != 1) {
+    _trig_error(E_UNEXPECTED, "Unexpected untagged response");
+    return;
+  }
+
+  auto search_resp = QList<std::size_t>{};
+  for (const auto& item :
+       resp.untagged[0].second.split(' ', Qt::SkipEmptyParts)) {
+    bool ok = false;
+    auto index = item.toULongLong(&ok);
+    if (!ok) {
+      qWarning() << "Failed to parse SEARCH response: Not a number.";
+      continue;
+    }
+    search_resp.push_back(index);
+  }
+
+  _queue.enqueue(QVariant::fromValue(std::move(search_resp)));
+  emit ready_read();
+}
+
 QStringList
 IMAP::_parse_attrs(const QString& attrs_str)
 {
@@ -482,14 +559,14 @@ IMAP::_on_connected()
   }
 
   auto resp = IMAPResponse{ _sock, "A000" };
-  if (resp.untagged().size() != 1) {
+  if (resp.untagged.size() != 1) {
     _trig_error(E_UNEXPECTED, "Unexpected tagged response");
     return;
   }
 
-  if (resp.untagged(0).first == "OK") {
+  if (resp.untagged[0].first == Response::OK) {
     _status = S_CONNECT;
-  } else if (resp.untagged(0).first == "PREAUTH") {
+  } else if (resp.untagged[0].first == Response::PREAUTH) {
     _status = S_AUTHENTICATE;
   } else {
     _trig_error(E_UNEXPECTED, "Unexpected tagged response");
@@ -528,23 +605,33 @@ IMAP::_on_error_occurred(QSslSocket::SocketError /*error*/)
 void
 IMAP::_on_ready_read()
 {
-  if (_last_cmd == LOGIN) {
+  if (_last_cmd == Command::LOGIN) {
     _handle_login();
     return;
   }
 
-  if (_last_cmd == LOGOUT) {
+  if (_last_cmd == Command::LOGOUT) {
     _handle_logout();
     return;
   }
 
-  if (_last_cmd == LIST) {
+  if (_last_cmd == Command::LIST) {
     _handle_list();
     return;
   }
 
-  if (_last_cmd == SELECT) {
+  if (_last_cmd == Command::SELECT) {
     _handle_select();
+    return;
+  }
+
+  if (_last_cmd == Command::NOOP) {
+    _handle_noop();
+    return;
+  }
+
+  if (_last_cmd == Command::SEARCH) {
+    _handle_search();
     return;
   }
 }

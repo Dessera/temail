@@ -12,11 +12,11 @@
 #include <qvariant.h>
 #include <utility>
 
-#include "qcontainerfwd.h"
+#include "temail/client/request.hpp"
 #include "temail/common.hpp"
 #include "temail/tag.hpp"
 
-namespace temail::clients {
+namespace temail::client {
 
 /**
  * @brief IMAP4 client.
@@ -63,9 +63,10 @@ public:
     E_TCPINTERNAL,  /**< TCP error, always means that the connection is
                       unavailable. */
     E_UNEXPECTED,   /**< Unexpected status for unknown reason. */
-    E_LOGINFAIL,    /**< Fail to login for any reason. */
-    E_BADCOMMAND,   /**< IMAP invalid command or params mismatched. */
-    E_NOTCONNECTED, /**< IMAP host not connected. */
+    E_NOTCONNECTED, /**< IMAP4 host not connected. */
+    E_BADCOMMAND,   /**< IMAP4 invalid command or params mismatched. */
+    E_LOGIN,        /**< Failed to login for any reason. */
+    E_REFERENCE,    /**< Failed to inspect reference or name. */
   };
 
   Q_ENUM(ErrorType)
@@ -74,30 +75,44 @@ public:
    * @brief IMAP4 response types.
    *
    */
-  enum ResponseType : uint8_t
+  enum class Response : uint8_t
   {
-    OK,    /**< OK response. */
-    NO,    /**< NO response. */
-    BAD,   /**< BAD response. */
-    BLANK, /**< BLANK response. */
+    OK,         /**< OK response. */
+    NO,         /**< NO response. */
+    BAD,        /**< BAD response. */
+    PREAUTH,    /**< PREAUTH response. */
+    BYE,        /**< BYE response. */
+    CAPABILITY, /**< CAPABILITY response. */
+    LIST,       /**< LIST response. */
+    LSUB,       /**< LSUB response. */
+    SEARCH,     /**< SEARCH response. */
+    FLAGS,      /**< FLAGS response. */
+    EXISTS,     /**< EXISTS response. */
+    RECENT,     /**< RECENT response. */
+    EXPUNGE,    /**< EXPUNGE response. */
+    FETCH,      /**< FETCH response. */
+    MAILBOX,    /**< MAILBOX response. */
+    COPY,       /**< COPY response. */
+    STORE,      /**< STORE response. */
   };
 
-  Q_ENUM(ResponseType)
+  Q_ENUM(Response)
 
   /**
    * @brief IMAP4 command types.
    *
    */
-  enum CommandType : uint8_t
+  enum class Command : uint8_t
   {
-    NOOP,   /**< NOOP command. */
     LOGIN,  /**< LOGIN command. */
     LOGOUT, /**< LOGOUT command. */
     LIST,   /**< LIST command. */
     SELECT, /**< SELECT command. */
+    NOOP,   /**< NOOP command. */
+    SEARCH, /**< SEARCH command. */
   };
 
-  Q_ENUM(CommandType)
+  Q_ENUM(Command)
 
   constexpr static uint16_t PORT_NO_SSL =
     143; /**< Default port when don't using SSL. */
@@ -130,7 +145,7 @@ private:
   std::unique_ptr<TagGenerator> _tags{ nullptr };
 
   Status _status{ S_DISCONNECT };
-  CommandType _last_cmd{ NOOP };
+  Command _last_cmd{ Command::NOOP };
   QString _last_tag;
 
   ErrorType _error{ E_UNKNOWN };
@@ -266,6 +281,21 @@ public:
   void select(const QString& path);
 
   /**
+   * @brief No op.
+   *
+   */
+  void noop();
+
+  /**
+   * @brief Search mails.
+   *
+   * @param criteria Search criteria.
+   * @note This method only implements a subset of IMAP4 SEARCH, including any
+   * criteria with no params.
+   */
+  void search(request::Search::Criteria criteria);
+
+  /**
    * @brief Read response.
    *
    * @return QVariant Response.
@@ -326,7 +356,7 @@ private:
    * @param type Command type,
    * @param cmd Command content.
    */
-  void _send_command(CommandType type, const QString& cmd);
+  void _send_command(Command type, const QString& cmd);
 
   /**
    * @brief Handles LOGIN response.
@@ -351,6 +381,18 @@ private:
    *
    */
   void _handle_select();
+
+  /**
+   * @brief Handles NOOP response.
+   *
+   */
+  void _handle_noop();
+
+  /**
+   * @brief Handles SEARCH response.
+   *
+   */
+  void _handle_search();
 
   /**
    * @brief Parse attrs to attr list.

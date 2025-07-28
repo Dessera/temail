@@ -1,5 +1,6 @@
 lib_qt_moc_src = files(
-  'temail/clients/imap.hpp',
+  'temail/client/imap.hpp',
+  'temail/client/request.hpp',
 )
 
 lib_inc = include_directories('.')

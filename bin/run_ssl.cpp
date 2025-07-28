@@ -1,12 +1,12 @@
 #include <qapplication.h>
 #include <qlogging.h>
 
-#include "temail/clients/imap.hpp"
+#include "temail/client/imap.hpp"
 
 int
 main(int argc, char** argv)
 {
-  using temail::clients::IMAP;
+  using temail::client::IMAP;
 
   auto app = QApplication{ argc, argv };
 
