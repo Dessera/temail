@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <cstdint>
+#include <qanystringview.h>
 #include <qbytearray.h>
 #include <qdebug.h>
 #include <qlist.h>
@@ -16,6 +17,7 @@
 #include "temail/client/imap.hpp"
 #include "temail/client/request.hpp"
 #include "temail/client/response.hpp"
+#include "temail/common.hpp"
 #include "temail/tag.hpp"
 
 namespace temail::client {
@@ -72,6 +74,8 @@ public:
         continuation = true;
         continue;
       }
+
+      qWarning() << "IMAP4 CLient: Unhandled response line: " << buffer;
     }
   }
 
@@ -79,33 +83,34 @@ private:
   void _handle_tagged(const QString& buffer)
   {
     if (auto parsed = TAGGED_REG.match(buffer); parsed.hasMatch()) {
-      tagged.emplace_back(_str_to_enum<IMAP::Response>(parsed.captured("type")),
+      tagged.emplace_back(common::enum_value<IMAP::Response>(
+                            parsed.captured("type").toLocal8Bit().constData()),
                           parsed.captured("data"));
+      return;
     }
+
+    qWarning() << "IMAP4 CLient: Unhandled response line: " << buffer;
   }
 
   void _handle_untagged(const QString& buffer)
   {
     if (auto parsed = UNTAGGED_REG.match(buffer); parsed.hasMatch()) {
       untagged.emplace_back(
-        _str_to_enum<IMAP::Response>(parsed.captured("type")),
+        common::enum_value<IMAP::Response>(
+          parsed.captured("type").toLocal8Bit().constData()),
         parsed.captured("data"));
       return;
     }
 
     if (auto parsed = UNTAGGED_TRAILING_REG.match(buffer); parsed.hasMatch()) {
       untagged_trailing.emplace_back(
-        _str_to_enum<IMAP::Response>(parsed.captured("type")),
+        common::enum_value<IMAP::Response>(
+          parsed.captured("type").toLocal8Bit().constData()),
         parsed.captured("data"));
       return;
     }
-  }
 
-  template<typename Em>
-  Em _str_to_enum(const QString& name)
-  {
-    auto enum_meta = QMetaEnum::fromType<Em>();
-    return static_cast<Em>(enum_meta.keysToValue(name.toStdString().c_str()));
+    qWarning() << "IMAP4 CLient: Unhandled response line: " << buffer;
   }
 };
 
@@ -217,8 +222,8 @@ IMAP::login(const QString& username, const QString& password)
     return;
   }
 
-  auto cmd = QString{ "LOGIN %1 %2" }.arg(username).arg(password);
-  _send_command(Command::LOGIN, cmd);
+  _send_command(Command::LOGIN,
+                QString{ "LOGIN %1 %2" }.arg(username).arg(password));
 }
 
 void
@@ -229,22 +234,19 @@ IMAP::logout()
     return;
   }
 
-  auto cmd = QString{ "LOGOUT" };
-  _send_command(Command::LOGOUT, cmd);
+  _send_command(Command::LOGOUT, "LOGOUT");
 }
 
 void
 IMAP::list(const QString& path, const QString& pattern)
 {
-  auto cmd = QString{ "LIST %2 %3" }.arg(path).arg(pattern);
-  _send_command(Command::LIST, cmd);
+  _send_command(Command::LIST, QString{ "LIST %2 %3" }.arg(path).arg(pattern));
 }
 
 void
 IMAP::select(const QString& path)
 {
-  auto cmd = QString{ "SELECT %2" }.arg(path);
-  _send_command(Command::SELECT, cmd);
+  _send_command(Command::SELECT, QString{ "SELECT %2" }.arg(path));
 }
 
 void
@@ -256,9 +258,8 @@ IMAP::noop()
 void
 IMAP::search(request::Search::Criteria criteria)
 {
-  auto enum_meta = QMetaEnum::fromType<request::Search::Criteria>();
-  auto cmd = QString{ "SEARCH %1" }.arg(enum_meta.valueToKey(criteria));
-  _send_command(Command::SEARCH, cmd);
+  _send_command(Command::SEARCH,
+                QString{ "SEARCH %1" }.arg(common::enum_name(criteria)));
 }
 
 QVariant
@@ -273,7 +274,7 @@ IMAP::read()
 }
 
 void
-IMAP::_send_command(Command type, const QString& cmd)
+IMAP::_send_command(Command type, QAnyStringView cmd)
 {
   if (_status == S_DISCONNECT) {
     _trig_error(E_NOTCONNECTED,

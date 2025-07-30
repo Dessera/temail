@@ -1,6 +1,5 @@
 #pragma once
 
-#include "temail/common.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <ostream>
@@ -10,6 +9,8 @@
 #include <qstringlist.h>
 #include <qvariant.h>
 #include <utility>
+
+#include "temail/common.hpp"
 
 namespace temail::client::response {
 

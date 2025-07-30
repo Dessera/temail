@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <qanystringview.h>
 #include <qeventloop.h>
 #include <qobject.h>
 #include <qqueue.h>
@@ -356,7 +357,7 @@ private:
    * @param type Command type,
    * @param cmd Command content.
    */
-  void _send_command(Command type, const QString& cmd);
+  void _send_command(Command type, QAnyStringView cmd);
 
   /**
    * @brief Handles LOGIN response.
