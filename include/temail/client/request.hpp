@@ -1,3 +1,14 @@
+/**
+ * @file request.hpp
+ * @author Dessera (dessera@qq.com)
+ * @brief Temail request types.
+ * @version 0.1.0
+ * @date 2025-08-01
+ *
+ * @copyright Copyright (c) 2025 Dessera
+ *
+ */
+
 #pragma once
 
 #include <cstdint>
@@ -40,6 +51,28 @@ public:
   };
 
   Q_ENUM(Criteria)
+};
+
+/**
+ * @brief Fetch fields (not a part of RFC1730).
+ *
+ */
+class TEMAIL_PUBLIC Fetch : public QObject
+{
+  Q_OBJECT
+
+public:
+  /**
+   * @brief Fetch fields.
+   *
+   */
+  enum Field : uint8_t
+  {
+    SIMPLE, /**< Simple mail info. */
+    TEXT,   /**< Mail body. */
+  };
+
+  Q_ENUM(Field)
 };
 
 }

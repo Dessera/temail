@@ -1,9 +1,23 @@
+/**
+ * @file imap.hpp
+ * @author Dessera (dessera@qq.com)
+ * @brief Temail IMAP4 client.
+ * @version 0.1.0
+ * @date 2025-08-01
+ *
+ * @copyright Copyright (c) 2025 Dessera
+ *
+ */
+
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <qanystringview.h>
 #include <qeventloop.h>
+#include <qlist.h>
 #include <qobject.h>
 #include <qqueue.h>
 #include <qregularexpression.h>
@@ -12,12 +26,19 @@
 #include <qtmetamacros.h>
 #include <qvariant.h>
 #include <utility>
+#include <vector>
 
 #include "temail/client/request.hpp"
 #include "temail/common.hpp"
 #include "temail/tag.hpp"
 
 namespace temail::client {
+
+namespace detail {
+
+class IMAPResponse;
+
+}
 
 /**
  * @brief IMAP4 client.
@@ -59,8 +80,8 @@ public:
    */
   enum ErrorType : uint8_t
   {
-    E_UNKNOWN, /**< Unknown error, means no error or some confusing errors. */
-
+    E_NOERR,        /**< No error. */
+    E_UNKNOWN,      /**< Unknown error. */
     E_TCPINTERNAL,  /**< TCP error, always means that the connection is
                       unavailable. */
     E_UNEXPECTED,   /**< Unexpected status for unknown reason. */
@@ -68,6 +89,7 @@ public:
     E_BADCOMMAND,   /**< IMAP4 invalid command or params mismatched. */
     E_LOGIN,        /**< Failed to login for any reason. */
     E_REFERENCE,    /**< Failed to inspect reference or name. */
+    E_PARSE,        /**< Failed to parse response. */
   };
 
   Q_ENUM(ErrorType)
@@ -111,9 +133,16 @@ public:
     SELECT, /**< SELECT command. */
     NOOP,   /**< NOOP command. */
     SEARCH, /**< SEARCH command. */
+    FETCH,  /**< FETCH command. */
+    NOCMD,  /**< No command. */
   };
 
   Q_ENUM(Command)
+
+  using ResponseHandler =
+    std::function<void(detail::IMAPResponse*,
+                       std::function<void(ErrorType, const QString&)>,
+                       std::function<void(const QVariant&)>)>;
 
   constexpr static uint16_t PORT_NO_SSL =
     143; /**< Default port when don't using SSL. */
@@ -124,20 +153,8 @@ public:
 
   constexpr static const char* CRLF = "\r\n"; /**< Crlf. */
 
-  inline static const QRegularExpression LIST_REG{
-    R"REGEX(\((?P<attrs>[^)]+)\) "(?P<parent>[^"]+)" "(?P<name>[^"]+)")REGEX"
-  }; /**< Regex to parse LIST response such as (\XXX \XXX) "XXX" "XXX" into
-        (<attrs>) "<parent>" "<name>" */
-
-  inline static const QRegularExpression ATTRS_REG{
-    R"REGEX(\((?P<attrs>[^)]+)\))REGEX"
-  }; /**< Regex to parse attrs such as (\XXX \XXX) into (<attrs>) */
-
-  inline static const QRegularExpression SELECT_BRACKET_REG{
-    R"REGEX(\[(?P<type>[A-Z-]+)( (\()?(?P<data>[^)]+)(\))?)?\])REGEX"
-  }; /**< Regex to parse bracket response such as [XXX XXX] XXX, [XXX] XXX or
-        [XXX (\XXX \XXX)] XXX into [<type> <data>] XXX, [<type>] XXX or [<type>
-        (<data>)] XXX */
+  static const QMap<Command, ResponseHandler>
+    RESPONSE_HANDLER; /**< Response handler map. */
 
 private:
   QSslSocket* _sock;
@@ -146,11 +163,10 @@ private:
   std::unique_ptr<TagGenerator> _tags{ nullptr };
 
   Status _status{ S_DISCONNECT };
-  Command _last_cmd{ Command::NOOP };
-  QString _last_tag;
 
-  ErrorType _error{ E_UNKNOWN };
+  ErrorType _error{ E_NOERR };
   QString _estr;
+  std::vector<QPair<Command, std::unique_ptr<detail::IMAPResponse>>> _resp;
 
 public:
   /**
@@ -246,11 +262,21 @@ public:
   [[nodiscard]] QString error_string() const;
 
   /**
-   * @brief Get error flag.
+   * @brief Get error status.
    *
-   * @return ErrorFlags Error flag.
+   * @return ErrorType Error status.
    */
   [[nodiscard]] TEMAIL_INLINE auto error() const { return _error; }
+
+  /**
+   * @brief Reset error status.
+   *
+   */
+  TEMAIL_INLINE void reset_error()
+  {
+    _error = E_NOERR;
+    _estr.clear();
+  }
 
   /**
    * @brief Login to IMAP4 server.
@@ -295,6 +321,16 @@ public:
    * criteria with no params.
    */
   void search(request::Search::Criteria criteria);
+
+  /**
+   * @brief Fetch mail info.
+   *
+   * @param id Mail id.
+   * @param field Fetch field.
+   * @note This method only fetch simple parts (such as BODY[HEADER] and
+   * BODY[1]).
+   */
+  void fetch(std::size_t id, request::Fetch::Field field);
 
   /**
    * @brief Read response.
@@ -358,50 +394,6 @@ private:
    * @param cmd Command content.
    */
   void _send_command(Command type, QAnyStringView cmd);
-
-  /**
-   * @brief Handles LOGIN response.
-   *
-   */
-  void _handle_login();
-
-  /**
-   * @brief Handles LOGOUT response.
-   *
-   */
-  void _handle_logout();
-
-  /**
-   * @brief Handles LIST response.
-   *
-   */
-  void _handle_list();
-
-  /**
-   * @brief Handles SELECT response.
-   *
-   */
-  void _handle_select();
-
-  /**
-   * @brief Handles NOOP response.
-   *
-   */
-  void _handle_noop();
-
-  /**
-   * @brief Handles SEARCH response.
-   *
-   */
-  void _handle_search();
-
-  /**
-   * @brief Parse attrs to attr list.
-   *
-   * @param attrs_str Attrs such as "\XXX \YYY".
-   * @return QStringList Attr list.
-   */
-  QStringList _parse_attrs(const QString& attrs_str);
 
 signals:
   /**

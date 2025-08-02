@@ -1,1 +1,5 @@
-lib_src += files('imap.cpp',)
+lib_src += files(
+  'imap.cpp',
+)
+
+subdir('imap')

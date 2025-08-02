@@ -1,6 +1,16 @@
+/**
+ * @file common.hpp
+ * @author Dessera (dessera@qq.com)
+ * @brief Temail common utils.
+ * @version 0.1.0
+ * @date 2025-08-02
+ *
+ * @copyright Copyright (c) 2025 Dessera
+ *
+ */
+
 #pragma once
 
-#include <qanystringview.h>
 #include <qlogging.h>
 #include <qmetaobject.h>
 
@@ -26,6 +36,13 @@
 
 namespace temail::common {
 
+/**
+ * @brief Convert string to qt enum.
+ *
+ * @tparam Et Enum type.
+ * @param name Enum name.
+ * @return Et Enum value.
+ */
 template<typename Et>
 Et
 enum_value(const char* name)
@@ -45,6 +62,13 @@ enum_value(const char* name)
   return static_cast<Et>(value);
 }
 
+/**
+ * @brief Convert qt enum to string.
+ *
+ * @tparam Et Enum type.
+ * @param value Enum value.
+ * @return const char* Enum name.
+ */
 template<typename Et>
 TEMAIL_INLINE const char*
 enum_name(Et value)

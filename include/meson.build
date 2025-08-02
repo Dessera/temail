@@ -5,4 +5,8 @@ lib_qt_moc_src = files(
 
 lib_inc = include_directories('.')
 
-install_subdir('temail', install_dir: 'include')
+install_subdir(
+  'temail',
+  install_dir: 'include',
+  exclude_directories: ['private'],
+)

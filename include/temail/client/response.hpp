@@ -1,3 +1,14 @@
+/**
+ * @file response.hpp
+ * @author Dessera (dessera@qq.com)
+ * @brief Temail response types.
+ * @version 0.1.0
+ * @date 2025-08-02
+ *
+ * @copyright Copyright (c) 2025 Dessera
+ *
+ */
+
 #pragma once
 
 #include <cstddef>
