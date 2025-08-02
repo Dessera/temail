@@ -18,6 +18,7 @@
 #include <qanystringview.h>
 #include <qeventloop.h>
 #include <qlist.h>
+#include <qmap.h>
 #include <qobject.h>
 #include <qqueue.h>
 #include <qregularexpression.h>
@@ -28,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+#include "temail/client/base.hpp"
 #include "temail/client/request.hpp"
 #include "temail/common.hpp"
 #include "temail/tag.hpp"
@@ -44,23 +46,11 @@ class IMAPResponse;
  * @brief IMAP4 client.
  *
  */
-class TEMAIL_PUBLIC IMAP : public QObject
+class TEMAIL_PUBLIC IMAP : public Base
 {
   Q_OBJECT
 
 public:
-  /**
-   * @brief SSL option.
-   *
-   */
-  enum SslOption : uint8_t
-  {
-    NO_SSL, /**< Do not use SSL. */
-    USE_SSL /**< Use SSL. */
-  };
-
-  Q_ENUM(SslOption)
-
   /**
    * @brief Client status types.
    *
@@ -73,26 +63,6 @@ public:
   };
 
   Q_ENUM(Status)
-
-  /**
-   * @brief IMAP4 error types.
-   *
-   */
-  enum ErrorType : uint8_t
-  {
-    E_NOERR,        /**< No error. */
-    E_UNKNOWN,      /**< Unknown error. */
-    E_TCPINTERNAL,  /**< TCP error, always means that the connection is
-                      unavailable. */
-    E_UNEXPECTED,   /**< Unexpected status for unknown reason. */
-    E_NOTCONNECTED, /**< IMAP4 host not connected. */
-    E_BADCOMMAND,   /**< IMAP4 invalid command or params mismatched. */
-    E_LOGIN,        /**< Failed to login for any reason. */
-    E_REFERENCE,    /**< Failed to inspect reference or name. */
-    E_PARSE,        /**< Failed to parse response. */
-  };
-
-  Q_ENUM(ErrorType)
 
   /**
    * @brief IMAP4 response types.
@@ -149,9 +119,12 @@ public:
   constexpr static uint16_t PORT_USE_SSL =
     993; /**< Default port when using SSL. */
 
-  constexpr static int TIMEOUT_MSECS = 30000; /**< Default timeout. */
-
   constexpr static const char* CRLF = "\r\n"; /**< Crlf. */
+
+  inline static const QMap<request::Fetch::Field, QString> FETCH_FIELD{
+    { request::Fetch::SIMPLE, "BODY.PEEK[HEADER]" },
+    { request::Fetch::TEXT, "(BODY[HEADER.FIELDS (CONTENT-TYPE)] BODY[1])" }
+  };
 
   static const QMap<Command, ResponseHandler>
     RESPONSE_HANDLER; /**< Response handler map. */
@@ -164,9 +137,8 @@ private:
 
   Status _status{ S_DISCONNECT };
 
-  ErrorType _error{ E_NOERR };
-  QString _estr;
   std::vector<QPair<Command, std::unique_ptr<detail::IMAPResponse>>> _resp;
+  QMap<QString, CommandCallback> _resp_callback;
 
 public:
   /**
@@ -178,201 +150,46 @@ public:
 
   ~IMAP() override;
 
-  /**
-   * @brief Connect to IMAP4 host, will emit `connected` after connection
-   * established.
-   *
-   * @param url Remote url.
-   * @param port Remote port.
-   * @param ssl SSL option.
-   */
-  void connect_to_host(const QString& url,
-                       uint16_t port = 0,
-                       SslOption ssl = USE_SSL);
-
-  /**
-   * @brief Connect to IMAP4 host, will emit `connected` after connection
-   * established.
-   *
-   * @param url Remote url.
-   * @param ssl SSL option.
-   */
-  void connect_to_host(const QString& url, SslOption ssl);
-
-  /**
-   * @brief Disconnect from IMAP4 host.
-   *
-   */
-  void disconnect_from_host();
-
-  /**
-   * @brief Check if connection is established.
-   *
-   * @return true Client has connected.
-   * @return false Client has not connected.
-   */
-  [[nodiscard]] TEMAIL_INLINE bool is_connected() const
+  void connect_to_host(
+    const QString& url,
+    uint16_t port = 0,
+    SslOption ssl = USE_SSL,
+    const CommandCallback& callback = _default_read_handler) override;
+  void disconnect_from_host(
+    const CommandCallback& callback = _default_read_handler) override;
+  bool is_connected() override
   {
     return _status == S_CONNECT || _status == S_AUTHENTICATE;
   }
-
-  /**
-   * @brief Check if client has disconnected from the host.
-   *
-   * @return true Client has disconnected.
-   * @return false Client has not disconnected.
-   */
-  [[nodiscard]] TEMAIL_INLINE bool is_disconnected() const
-  {
-    return _status == S_DISCONNECT;
-  }
-
-  /**
-   * @brief Wait for `connected` signal.
-   *
-   * @param msecs Timeout.
-   * @return true Signal emitted.
-   * @return false Error occurred when waiting for signal.
-   */
-  bool wait_for_connected(int msecs = TIMEOUT_MSECS);
-
-  /**
-   * @brief Wait for `disconnected` signal.
-   *
-   * @param msecs Timeout.
-   * @return true Signal emitted.
-   * @return false Error occurred when waiting for signal.
-   */
-  bool wait_for_disconnected(int msecs = TIMEOUT_MSECS);
-
-  /**
-   * @brief Wait for `ready_read` signal.
-   *
-   * @param msecs Timeout.
-   * @return true Signal emitted.
-   * @return false Error occurred when waiting for signal.
-   */
-  bool wait_for_ready_read(int msecs = TIMEOUT_MSECS);
-
-  /**
-   * @brief Get error string.
-   *
-   * @return QString Error string.
-   */
-  [[nodiscard]] QString error_string() const;
-
-  /**
-   * @brief Get error status.
-   *
-   * @return ErrorType Error status.
-   */
-  [[nodiscard]] TEMAIL_INLINE auto error() const { return _error; }
-
-  /**
-   * @brief Reset error status.
-   *
-   */
-  TEMAIL_INLINE void reset_error()
-  {
-    _error = E_NOERR;
-    _estr.clear();
-  }
-
-  /**
-   * @brief Login to IMAP4 server.
-   *
-   * @param username Username.
-   * @param password Password.
-   */
-  void login(const QString& username, const QString& password);
-
-  /**
-   * @brief Logout from IMAP4 server.
-   *
-   */
-  void logout();
-
-  /**
-   * @brief List folders.
-   *
-   * @param path Parent path.
-   * @param pattern Filter pattern.
-   */
-  void list(const QString& path, const QString& pattern);
-
-  /**
-   * @brief Select folder.
-   *
-   * @param path Folder path.
-   */
-  void select(const QString& path);
-
-  /**
-   * @brief No op.
-   *
-   */
-  void noop();
-
-  /**
-   * @brief Search mails.
-   *
-   * @param criteria Search criteria.
-   * @note This method only implements a subset of IMAP4 SEARCH, including any
-   * criteria with no params.
-   */
-  void search(request::Search::Criteria criteria);
-
-  /**
-   * @brief Fetch mail info.
-   *
-   * @param id Mail id.
-   * @param field Fetch field.
-   * @note This method only fetch simple parts (such as BODY[HEADER] and
-   * BODY[1]).
-   */
-  void fetch(std::size_t id, request::Fetch::Field field);
-
-  /**
-   * @brief Read response.
-   *
-   * @return QVariant Response.
-   */
-  QVariant read();
+  bool is_disconnected() override { return _status == S_DISCONNECT; }
+  void login(const QString& username,
+             const QString& password,
+             const CommandCallback& callback = _default_read_handler) override;
+  void logout(const CommandCallback& callback = _default_read_handler) override;
+  void list(const QString& path,
+            const QString& pattern,
+            const CommandCallback& callback = _default_read_handler) override;
+  void select(const QString& path,
+              const CommandCallback& callback = _default_read_handler) override;
+  void noop(const CommandCallback& callback = _default_read_handler) override;
+  void search(request::Search::Criteria criteria,
+              const CommandCallback& callback = _default_read_handler) override;
+  void fetch(std::size_t id,
+             request::Fetch::Field field,
+             std::size_t range = 1,
+             const CommandCallback& callback = _default_read_handler) override;
+  QVariant read() override;
 
 private:
-  /**
-   * @brief Wait for specific signal.
-   *
-   * @tparam Ef Signal type.
-   * @param msecs Timeout.
-   * @param func Signal function.
-   */
-  template<typename Ef>
-  void _wait_for_event(int msecs, Ef&& func)
-  {
-    auto loop = QEventLoop{};
-    connect(this, std::forward<Ef>(func), &loop, &QEventLoop::quit);
-    connect(this, &IMAP::error_occurred, &loop, &QEventLoop::quit);
-
-    if (msecs > 0) {
-      auto* timer = new QTimer{ &loop };
-      timer->setSingleShot(true);
-      connect(timer, &QTimer::timeout, &loop, &QEventLoop::quit);
-
-      timer->start(msecs);
-    }
-
-    loop.exec();
-  }
-
   /**
    * @brief Helper to trig an error.
    *
    * @param err Error type.
+   * @param estr Error string.
    */
-  TEMAIL_INLINE void _trig_error(ErrorType err)
+  TEMAIL_INLINE void _trig_error(ErrorType err, const QString& estr)
   {
-    _error = err;
+    _set_error(err, estr);
     emit error_occurred();
   }
 
@@ -380,11 +197,12 @@ private:
    * @brief Helper to trig an error.
    *
    * @param err Error type.
+   * @param estr Error string.
    */
-  TEMAIL_INLINE void _trig_error(ErrorType err, QString estr)
+  TEMAIL_INLINE void _trig_error(ErrorType err, QString&& estr)
   {
-    _estr = std::move(estr);
-    _trig_error(err);
+    _set_error(err, std::move(estr));
+    emit error_occurred();
   }
 
   /**
@@ -393,34 +211,11 @@ private:
    * @param type Command type,
    * @param cmd Command content.
    */
-  void _send_command(Command type, QAnyStringView cmd);
+  void _request(Command type,
+                QAnyStringView cmd,
+                const CommandCallback& callback);
 
-signals:
-  /**
-   * @brief Emiteed when client has connected to the host.
-   *
-   */
-  void connected();
-
-  /**
-   * @brief Emiteed when client has disconnected to the host.
-   *
-   */
-  void disconnected();
-
-  /**
-   * @brief Emitted when ready to read.
-   *
-   */
-  void ready_read();
-
-  /**
-   * @brief Emiteed when error occurred in client.
-   *
-   */
-  void error_occurred();
-
-private slots:
+private slots: // NOLINT
   /**
    * @brief Handles the tcp socket `connected` signal.
    *

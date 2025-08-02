@@ -2,7 +2,6 @@
 #include <qlogging.h>
 
 #include "temail/client/imap.hpp"
-#include "temail/client/request.hpp"
 
 int
 main(int argc, char** argv)

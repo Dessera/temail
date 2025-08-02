@@ -17,6 +17,7 @@
 #include <qvariant.h>
 #include <utility>
 
+#include "temail/client/base.hpp"
 #include "temail/client/imap.hpp"
 #include "temail/client/request.hpp"
 #include "temail/common.hpp"
@@ -24,6 +25,7 @@
 #include "temail/private/client/imap/list.hpp"
 #include "temail/private/client/imap/login.hpp"
 #include "temail/private/client/imap/logout.hpp"
+#include "temail/private/client/imap/noop.hpp"
 #include "temail/private/client/imap/response.hpp"
 #include "temail/private/client/imap/search.hpp"
 #include "temail/private/client/imap/select.hpp"
@@ -36,12 +38,13 @@ const QMap<IMAP::Command, IMAP::ResponseHandler> IMAP::RESPONSE_HANDLER{
   { IMAP::Command::LOGOUT, detail::imap_handle_logout },
   { IMAP::Command::LIST, detail::imap_handle_list },
   { IMAP::Command::SELECT, detail::imap_handle_select },
+  { IMAP::Command::NOOP, detail::imap_handle_noop },
   { IMAP::Command::SEARCH, detail::imap_handle_search },
   { IMAP::Command::FETCH, detail::imap_handle_fetch },
 };
 
 IMAP::IMAP(QObject* parent)
-  : QObject{ parent }
+  : Base{ parent }
   , _sock{ new QSslSocket{ this } }
 {
   connect(_sock, &QSslSocket::connected, this, &IMAP::_on_connected);
@@ -57,9 +60,13 @@ IMAP::~IMAP()
 }
 
 void
-IMAP::connect_to_host(const QString& url, uint16_t port, SslOption ssl)
+IMAP::connect_to_host(const QString& url,
+                      uint16_t port,
+                      SslOption ssl,
+                      const CommandCallback& callback)
 {
   if (is_connected()) {
+    _trig_error(E_DUPLICATE, "Connection has established");
     return;
   }
 
@@ -72,6 +79,8 @@ IMAP::connect_to_host(const QString& url, uint16_t port, SslOption ssl)
          port,
          ssl == USE_SSL ? "with SSL" : "no SSL");
 
+  _resp_callback.insert("CONNECT", callback);
+
   if (ssl == USE_SSL) {
     _sock->connectToHostEncrypted(url, port);
   } else {
@@ -80,126 +89,88 @@ IMAP::connect_to_host(const QString& url, uint16_t port, SslOption ssl)
 }
 
 void
-IMAP::connect_to_host(const QString& url, SslOption ssl)
-{
-  connect_to_host(url, 0, ssl);
-}
-
-void
-IMAP::disconnect_from_host()
+IMAP::disconnect_from_host(const CommandCallback& callback)
 {
   if (_status == S_DISCONNECT) {
+    _trig_error(E_DUPLICATE, "Connection has not established");
     return;
   }
 
   qDebug() << "IMAP4 Client: Try to disconnect from host.";
 
+  _resp_callback.insert("DISCONNECT", callback);
+
   _sock->disconnectFromHost();
 }
 
-bool
-IMAP::wait_for_connected(int msecs)
-{
-  if (is_connected()) {
-    return true;
-  }
-
-  _wait_for_event(msecs, &IMAP::connected);
-
-  return is_connected();
-}
-
-bool
-IMAP::wait_for_disconnected(int msecs)
-{
-  if (is_disconnected()) {
-    return true;
-  }
-
-  _wait_for_event(msecs, &IMAP::disconnected);
-
-  return is_disconnected();
-}
-
-bool
-IMAP::wait_for_ready_read(int msecs)
-{
-  _wait_for_event(msecs, &IMAP::ready_read);
-
-  return _error == E_NOERR;
-}
-
-QString
-IMAP::error_string() const
-{
-  if (_error == E_TCPINTERNAL) {
-    return _sock->errorString();
-  }
-
-  return _estr;
-}
-
 void
-IMAP::login(const QString& username, const QString& password)
+IMAP::login(const QString& username,
+            const QString& password,
+            const CommandCallback& callback)
 {
   if (_status == S_AUTHENTICATE) {
-    _trig_error(E_LOGIN, "Already authenticated");
+    _trig_error(E_DUPLICATE, "Already authenticated");
     return;
   }
 
-  _send_command(Command::LOGIN,
-                QString{ "LOGIN %1 %2" }.arg(username).arg(password));
+  _request(Command::LOGIN,
+           QString{ "LOGIN %1 %2" }.arg(username).arg(password),
+           callback);
 }
 
 void
-IMAP::logout()
+IMAP::logout(const CommandCallback& callback)
 {
   if (_status == S_CONNECT) {
-    disconnect_from_host();
+    disconnect_from_host(callback);
     return;
   }
 
-  _send_command(Command::LOGOUT, "LOGOUT");
+  _request(Command::LOGOUT, "LOGOUT", callback);
 }
 
 void
-IMAP::list(const QString& path, const QString& pattern)
+IMAP::list(const QString& path,
+           const QString& pattern,
+           const CommandCallback& callback)
 {
-  _send_command(Command::LIST, QString{ "LIST %2 %3" }.arg(path).arg(pattern));
+  _request(
+    Command::LIST, QString{ "LIST %2 %3" }.arg(path).arg(pattern), callback);
 }
 
 void
-IMAP::select(const QString& path)
+IMAP::select(const QString& path, const CommandCallback& callback)
 {
-  _send_command(Command::SELECT, QString{ "SELECT %2" }.arg(path));
+  _request(Command::SELECT, QString{ "SELECT %2" }.arg(path), callback);
 }
 
 void
-IMAP::noop()
+IMAP::noop(const CommandCallback& callback)
 {
-  _send_command(Command::NOOP, "NOOP");
+  _request(Command::NOOP, "NOOP", callback);
 }
 
 void
-IMAP::search(request::Search::Criteria criteria)
+IMAP::search(request::Search::Criteria criteria,
+             const CommandCallback& callback)
 {
-  _send_command(Command::SEARCH,
-                QString{ "SEARCH %1" }.arg(common::enum_name(criteria)));
+  _request(Command::SEARCH,
+           QString{ "SEARCH %1" }.arg(common::enum_name(criteria)),
+           callback);
 }
 
-// TODO: Remove if.
 void
-IMAP::fetch(std::size_t id, request::Fetch::Field field)
+IMAP::fetch(std::size_t id,
+            request::Fetch::Field field,
+            std::size_t range,
+            const CommandCallback& callback)
 {
-  if (field == request::Fetch::SIMPLE) {
-    _send_command(Command::FETCH,
-                  QString{ "FETCH %1 BODY.PEEK[HEADER]" }.arg(id));
-  } else {
-    _send_command(
-      Command::FETCH,
-      QString{ "FETCH %1 (BODY[HEADER.FIELDS (CONTENT-TYPE)] BODY[1])" }.arg(
-        id));
-  }
+  auto cmd_range = range <= 1 ? QString::number(id)
+                              : QString{ "%1:%2" }.arg(id).arg(id + range - 1);
+
+  _request(Command::FETCH,
+           QString{ "FETCH %1 %2" }.arg(cmd_range).arg(FETCH_FIELD[field]),
+           callback);
 }
 
 QVariant
@@ -214,11 +185,12 @@ IMAP::read()
 }
 
 void
-IMAP::_send_command(Command type, QAnyStringView cmd)
+IMAP::_request(Command type,
+               QAnyStringView cmd,
+               const CommandCallback& callback)
 {
   if (_status == S_DISCONNECT) {
-    _trig_error(E_NOTCONNECTED,
-                "Command is unreachable because server is not connected");
+    _trig_error(E_NOTCONNECTED, "Connection has not established");
     return;
   }
 
@@ -226,7 +198,14 @@ IMAP::_send_command(Command type, QAnyStringView cmd)
 
   _resp.emplace_back(type, std::make_unique<detail::IMAPResponse>(_sock, tag));
 
-  _sock->write(QString{ "%1 %2%3" }.arg(tag).arg(cmd).arg(CRLF).toUtf8());
+  if (!_resp_callback.contains(tag)) {
+    _resp_callback.insert(tag, callback);
+  } else {
+    qWarning() << "Failed to add callback for command " << cmd
+               << ": Callback already exists.";
+  }
+
+  _sock->write(QString{ "%1 %2%3" }.arg(tag).arg(cmd).arg(CRLF).toLocal8Bit());
   _sock->flush();
 }
 
@@ -234,7 +213,7 @@ void
 IMAP::_on_connected()
 {
   if (!_sock->waitForReadyRead(TIMEOUT_MSECS)) {
-    _trig_error(E_TCPINTERNAL);
+    _trig_error(E_INTERNAL, _sock->errorString());
     return;
   }
 
@@ -261,6 +240,10 @@ IMAP::_on_connected()
 
   qInfo() << "IMAP4 Client: Connection established with tag" << _tags->label();
 
+  if (_resp_callback.contains("CONNECT")) {
+    _resp_callback["CONNECT"]({});
+    _resp_callback.remove("CONNECT");
+  }
   emit connected();
 }
 
@@ -275,13 +258,17 @@ IMAP::_on_disconnected()
 
   qInfo() << "IMAP4 Client: Disconnected.";
 
+  if (_resp_callback.contains("DISCONNECT")) {
+    _resp_callback["DISCONNECT"]({});
+    _resp_callback.remove("DISCONNECT");
+  }
   emit disconnected();
 }
 
 void
 IMAP::_on_error_occurred(QSslSocket::SocketError /*error*/)
 {
-  _trig_error(E_TCPINTERNAL);
+  _trig_error(E_INTERNAL, _sock->errorString());
 }
 
 void
@@ -298,7 +285,7 @@ IMAP::_on_ready_read()
       qWarning() << "IMAP4 Client: Failed to parse response for command "
                  << resp.first;
 
-      _trig_error(E_PARSE, "Failed to parse response");
+      _trig_error(E_PARSE, "Invalid response");
       _resp.erase(_resp.begin());
     }
 
@@ -314,6 +301,11 @@ IMAP::_on_ready_read()
       }
 
       _queue.push_back(data);
+
+      if (_resp_callback.contains(resp.second->tag())) {
+        _resp_callback[resp.second->tag()](data);
+        _resp_callback.remove(resp.second->tag());
+      }
       emit ready_read();
     });
 

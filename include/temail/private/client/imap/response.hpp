@@ -137,6 +137,13 @@ public:
    */
   [[nodiscard]] TEMAIL_INLINE auto& raw() const { return _raw; }
 
+  /**
+   * @brief Get response tag.
+   *
+   * @return const QString& response tag.
+   */
+  [[nodiscard]] TEMAIL_INLINE auto& tag() const { return _tag; }
+
 private:
   /**
    * @brief Handles tagged input data.

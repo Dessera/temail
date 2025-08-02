@@ -12,7 +12,7 @@ void
 imap_handle_logout(
   IMAPResponse* resp,
   const std::function<void(IMAP::ErrorType, const QString&)>& error_handler,
-  const std::function<void(const QVariant&)>& /*success_handler*/)
+  const std::function<void(const QVariant&)>& success_handler)
 {
   if (resp->tagged().size() != 1) {
     error_handler(IMAP::E_UNEXPECTED, "Unexpected tagged response");
@@ -23,6 +23,8 @@ imap_handle_logout(
     error_handler(IMAP::E_BADCOMMAND, resp->tagged()[0].second);
     return;
   }
+
+  success_handler({});
 }
 
 }

@@ -1,4 +1,5 @@
 lib_qt_moc_src = files(
+  'temail/client/base.hpp',
   'temail/client/imap.hpp',
   'temail/client/request.hpp',
 )
