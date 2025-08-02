@@ -18,28 +18,4 @@ main(int argc, char** argv)
     qDebug() << client.error_string();
     return 1;
   }
-
-  client.login("dessera@qq.com", "wyjarpdqwvcqjhdd");
-  if (!client.wait_for_ready_read()) {
-    qDebug() << client.error_string();
-    return 1;
-  }
-
-  qDebug() << client.read();
-
-  client.select("INBOX");
-  if (!client.wait_for_ready_read()) {
-    qDebug() << client.error_string();
-    return 1;
-  }
-
-  qDebug() << client.read();
-
-  client.fetch(1, temail::client::request::Fetch::TEXT);
-  if (!client.wait_for_ready_read()) {
-    qDebug() << client.error_string();
-    return 1;
-  }
-
-  qDebug() << client.read();
 }
