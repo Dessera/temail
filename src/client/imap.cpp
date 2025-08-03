@@ -300,12 +300,16 @@ IMAP::_on_ready_read()
         _status = S_AUTHENTICATE;
       }
 
-      _queue.push_back(data);
-
       if (_resp_callback.contains(resp.second->tag())) {
         _resp_callback[resp.second->tag()](data);
         _resp_callback.remove(resp.second->tag());
       }
+
+      if (resp.first == Command::LOGOUT) {
+        return;
+      }
+
+      _queue.push_back(data);
       emit ready_read();
     });
 

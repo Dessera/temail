@@ -154,30 +154,37 @@ public:
     const QString& url,
     uint16_t port = 0,
     SslOption ssl = USE_SSL,
-    const CommandCallback& callback = _default_read_handler) override;
+    const CommandCallback& callback = _default_command_handler) override;
   void disconnect_from_host(
-    const CommandCallback& callback = _default_read_handler) override;
+    const CommandCallback& callback = _default_command_handler) override;
   bool is_connected() override
   {
     return _status == S_CONNECT || _status == S_AUTHENTICATE;
   }
   bool is_disconnected() override { return _status == S_DISCONNECT; }
-  void login(const QString& username,
-             const QString& password,
-             const CommandCallback& callback = _default_read_handler) override;
-  void logout(const CommandCallback& callback = _default_read_handler) override;
-  void list(const QString& path,
-            const QString& pattern,
-            const CommandCallback& callback = _default_read_handler) override;
-  void select(const QString& path,
-              const CommandCallback& callback = _default_read_handler) override;
-  void noop(const CommandCallback& callback = _default_read_handler) override;
-  void search(request::Search::Criteria criteria,
-              const CommandCallback& callback = _default_read_handler) override;
-  void fetch(std::size_t id,
-             request::Fetch::Field field,
-             std::size_t range = 1,
-             const CommandCallback& callback = _default_read_handler) override;
+  void login(
+    const QString& username,
+    const QString& password,
+    const CommandCallback& callback = _default_command_handler) override;
+  void logout(
+    const CommandCallback& callback = _default_command_handler) override;
+  void list(
+    const QString& path,
+    const QString& pattern,
+    const CommandCallback& callback = _default_command_handler) override;
+  void select(
+    const QString& path,
+    const CommandCallback& callback = _default_command_handler) override;
+  void noop(
+    const CommandCallback& callback = _default_command_handler) override;
+  void search(
+    request::Search::Criteria criteria,
+    const CommandCallback& callback = _default_command_handler) override;
+  void fetch(
+    std::size_t id,
+    request::Fetch::Field field,
+    std::size_t range = 1,
+    const CommandCallback& callback = _default_command_handler) override;
   QVariant read() override;
 
 private:

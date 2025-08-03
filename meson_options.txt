@@ -1,0 +1,41 @@
+option(
+  'build_test',
+  type: 'feature',
+  value: 'disabled',
+  description: 'Build test programs, need user-defined private data.',
+)
+
+option(
+  'test_imap_host',
+  type: 'string',
+  value: '',
+  description: 'IMAP4 host used by test program.',
+)
+
+option(
+  'test_imap_port',
+  type: 'integer',
+  value: 0,
+  description: 'IMAP4 host port used by test program.',
+)
+
+option(
+  'test_imap_use_ssl',
+  type: 'boolean',
+  value: true,
+  description: 'IMAP4 host ssl option used by test program.',
+)
+
+option(
+  'test_imap_username',
+  type: 'string',
+  value: '',
+  description: 'IMAP4 username used by test program.',
+)
+
+option(
+  'test_imap_password',
+  type: 'string',
+  value: '',
+  description: 'IMAP4 password used by test program.',
+)

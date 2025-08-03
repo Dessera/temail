@@ -94,7 +94,7 @@ public:
     const QString& url,
     uint16_t port = 0,
     SslOption ssl = USE_SSL,
-    const CommandCallback& callback = _default_read_handler) = 0;
+    const CommandCallback& callback = _default_command_handler) = 0;
 
   /**
    * @brief Connect to IMAP4 host.
@@ -106,7 +106,7 @@ public:
   TEMAIL_INLINE void connect_to_host(
     const QString& url,
     SslOption ssl,
-    const CommandCallback& callback = _default_read_handler)
+    const CommandCallback& callback = _default_command_handler)
   {
     connect_to_host(url, 0, ssl, callback);
   }
@@ -117,7 +117,7 @@ public:
    * @param callback Success callback.
    */
   virtual void disconnect_from_host(
-    const CommandCallback& callback = _default_read_handler) = 0;
+    const CommandCallback& callback = _default_command_handler) = 0;
 
   /**
    * @brief Check if connection is established.
@@ -145,7 +145,7 @@ public:
   virtual void login(
     const QString& username,
     const QString& password,
-    const CommandCallback& callback = _default_read_handler) = 0;
+    const CommandCallback& callback = _default_command_handler) = 0;
 
   /**
    * @brief Logout from server.
@@ -153,7 +153,7 @@ public:
    * @param callback Success callback.
    */
   virtual void logout(
-    const CommandCallback& callback = _default_read_handler) = 0;
+    const CommandCallback& callback = _default_command_handler) = 0;
 
   /**
    * @brief List folders.
@@ -165,7 +165,7 @@ public:
   virtual void list(
     const QString& path,
     const QString& pattern,
-    const CommandCallback& callback = _default_read_handler) = 0;
+    const CommandCallback& callback = _default_command_handler) = 0;
 
   /**
    * @brief Select folder.
@@ -175,7 +175,7 @@ public:
    */
   virtual void select(
     const QString& path,
-    const CommandCallback& callback = _default_read_handler) = 0;
+    const CommandCallback& callback = _default_command_handler) = 0;
 
   /**
    * @brief No op.
@@ -183,7 +183,7 @@ public:
    * @param callback Success callback.
    */
   virtual void noop(
-    const CommandCallback& callback = _default_read_handler) = 0;
+    const CommandCallback& callback = _default_command_handler) = 0;
 
   /**
    * @brief Search mails from server.
@@ -193,7 +193,7 @@ public:
    */
   virtual void search(
     request::Search::Criteria criteria,
-    const CommandCallback& callback = _default_read_handler) = 0;
+    const CommandCallback& callback = _default_command_handler) = 0;
 
   /**
    * @brief Fetch mails from server.
@@ -207,7 +207,7 @@ public:
     std::size_t id,
     request::Fetch::Field field,
     std::size_t range = 1,
-    const CommandCallback& callback = _default_read_handler) = 0;
+    const CommandCallback& callback = _default_command_handler) = 0;
 
   /**
    * @brief Read response.
@@ -268,7 +268,7 @@ public:
   }
 
 protected:
-  static void _default_read_handler(const QVariant& /*data*/) {}
+  static void _default_command_handler(const QVariant& /*data*/) {}
 
   /**
    * @brief Wait for specific signal.
