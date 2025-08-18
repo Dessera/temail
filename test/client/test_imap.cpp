@@ -35,6 +35,10 @@ IMAPTest::test_interface() // NOLINT
   QVERIFY(_client->wait_for_ready_read());
   QVERIFY(_client->read().canConvert<client::response::Search>());
 
+  _client->fetch(1,
+                 client::request::Fetch::TEXT | client::request::Fetch::MIME);
+  QVERIFY(_client->wait_for_ready_read());
+
   _client->logout();
   QVERIFY(_client->wait_for_disconnected());
 }

@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <qbytearray.h>
+#include <qdatastream.h>
 #include <qdebug.h>
 #include <qlist.h>
 #include <qlogging.h>
@@ -9,88 +10,84 @@
 #include <qregularexpression.h>
 #include <qsslsocket.h>
 #include <qstring.h>
-#include <qtypes.h>
+#include <qstringview.h>
 
 #include "temail/client/imap.hpp"
 #include "temail/common.hpp"
 #include "temail/private/client/imap/response.hpp"
 
+#define _forward_false(expr)                                                   \
+  {                                                                            \
+    if (!(expr)) {                                                             \
+      return false;                                                            \
+    }                                                                          \
+  }
+
+#define _emit_error()                                                          \
+  {                                                                            \
+    _error = true;                                                             \
+    return false;                                                              \
+  }
+
 namespace temail::client::detail {
 
 bool
-IMAPResponse::digest()
+IMAPResponse::digest(const QByteArray& data)
 {
-  if (_raw_mode) {
-    if (!_handle_raw()) {
-      return false;
-    }
+  auto stream = QDataStream{ data };
 
+  if (_raw_mode) {
+    _forward_false(_handle_raw(stream));
     _raw_mode = false;
   }
 
-  return _handle_command();
+  return _handle_command(stream);
 }
 
 bool
-IMAPResponse::_handle_tagged()
+IMAPResponse::_handle_tagged(const QString& data)
 {
-  auto bufstr = QString{ _buffer };
-
-  if (auto parsed = TAGGED_REG.match(bufstr); parsed.hasMatch()) {
+  if (auto parsed = TAGGED_REG.match(data); parsed.hasMatch()) {
     _tagged.emplace_back(common::enum_value<IMAP::Response>(
                            parsed.captured("type").toLocal8Bit().constData()),
                          parsed.captured("data"));
     return true;
   }
 
-  qWarning() << "IMAP4 Client: Unhandled response line: " << bufstr;
-
-  _error = true;
-  return false;
+  qWarning() << "IMAP4 Client| Unhandled response line: " << data;
+  _emit_error();
 }
 
 bool
-IMAPResponse::_handle_untagged()
+IMAPResponse::_handle_untagged(const QString& data, const QDataStream& stream)
 {
-  auto bufstr = QString{ _buffer };
-
-  if (auto parsed = UNTAGGED_FETCH_REG.match(bufstr); parsed.hasMatch()) {
+  if (auto parsed = UNTAGGED_FETCH_REG.match(data); parsed.hasMatch()) {
     bool ok = false;
     _id = parsed.captured("id").toULongLong(&ok);
     if (!ok) {
-      qWarning() << "IMAP4 Client: Failed to parse FETCH id: Not a number.";
-
-      _error = true;
-      return false;
+      qWarning() << "IMAP4 Client| Failed to parse FETCH id: Not a number.";
+      _emit_error();
     }
 
-    _bytes_to_read = parsed.captured("size").toLongLong(&ok);
-    if (!ok) {
-      qWarning() << "IMAP4 Client: Failed to parse FETCH size: Not a number.";
+    _forward_false(_handle_raw_meta(parsed.captured("data")));
 
-      _error = true;
-      return false;
+    if (_bytes_to_read != 0) {
+      _raw_mode = true;
+      _forward_false(_handle_raw(stream));
+      _raw_mode = false;
     }
 
-    _field = parsed.captured("field");
-
-    _raw_mode = true;
-    if (!_handle_raw()) {
-      return false;
-    }
-
-    _raw_mode = false;
     return true;
   }
 
-  if (auto parsed = UNTAGGED_REG.match(bufstr); parsed.hasMatch()) {
+  if (auto parsed = UNTAGGED_REG.match(data); parsed.hasMatch()) {
     _untagged.emplace_back(common::enum_value<IMAP::Response>(
                              parsed.captured("type").toLocal8Bit().constData()),
                            parsed.captured("data"));
     return true;
   }
 
-  if (auto parsed = UNTAGGED_TRAILING_REG.match(bufstr); parsed.hasMatch()) {
+  if (auto parsed = UNTAGGED_TRAILING_REG.match(data); parsed.hasMatch()) {
     _untagged_trailing.emplace_back(
       common::enum_value<IMAP::Response>(
         parsed.captured("type").toLocal8Bit().constData()),
@@ -98,106 +95,48 @@ IMAPResponse::_handle_untagged()
     return true;
   }
 
-  qWarning() << "IMAP4 Client: Unhandled response line: " << bufstr;
-
-  _error = true;
-  return false;
+  qWarning() << "IMAP4 Client| Unhandled response line: " << data;
+  _emit_error();
 }
 
 bool
-IMAPResponse::_handle_command()
+IMAPResponse::_handle_command(const QDataStream& stream)
 {
   while (true) {
-    if (!_buffer.endsWith("\r\n")) {
-      _buffer.append(_sock->readLine());
-    } else {
-      _buffer = _sock->readLine();
-    }
-
-    if (_buffer.isEmpty()) {
-      return true;
-    }
-
-    if (!_buffer.endsWith("\r\n")) {
-      return false;
-    }
+    _forward_false(_read_line_to_buffer(stream));
 
     if (_buffer.startsWith('*')) {
-      if (!_handle_untagged()) {
-        return false;
+      _forward_false(_handle_untagged(QString{ _buffer }.trimmed(), stream));
+
+      // `connect` returns only an untagged response.
+      if (_tag == IMAP::CONNECT_TAG) {
+        return true;
       }
-
-      continue;
+    } else if (_buffer.startsWith(_tag.toLocal8Bit())) {
+      // all command should ends with a tagged response.
+      return _handle_tagged(QString{ _buffer }.trimmed());
+    } else {
+      qWarning() << "IMAP4 Client| Unhandled response line: " << _buffer;
+      _emit_error();
     }
-
-    if (_buffer.startsWith(_tag.toLocal8Bit())) {
-      if (!_handle_tagged()) {
-        return false;
-      }
-
-      continue;
-    }
-
-    qWarning() << "IMAP4 Client: Unhandled response line: " << _buffer;
-
-    _error = true;
-    return false;
   }
 }
 
 bool
-IMAPResponse::_handle_raw() // NOLINT
+IMAPResponse::_handle_raw(const QDataStream& stream)
 {
   while (true) {
-    // fetch next field header.
     if (_bytes_to_read <= 0) {
-      // read next line.
-      if (!_buffer.endsWith("\r\n")) {
-        _buffer.append(_sock->readLine());
-      } else {
-        _buffer = _sock->readLine();
-      }
+      _forward_false(_read_line_to_buffer(stream));
 
-      // empty, should not happened.
-      if (_buffer.isEmpty()) {
-        _error = true;
-        return false;
-      }
-
-      // need more data.
-      if (!_buffer.endsWith("\r\n")) {
-        return false;
-      }
-
-      // `)` means end of fetch.
       if (_buffer.startsWith(')')) {
         return true;
       }
 
-      // update raw info, or refuse to parse.
-      if (auto parsed = MULTI_FETCH_REG.match(QString{ _buffer });
-          parsed.hasMatch()) {
-        bool ok = false;
-        _bytes_to_read = parsed.captured("size").toLongLong(&ok);
-        if (!ok) {
-          qWarning() << "IMAP4 Client: Failed to parse MULTI FETCH response "
-                        "size: Not a number.";
-          _error = true;
-          return false;
-        }
-
-        _field = parsed.captured("field");
-      } else {
-        qWarning() << "IMAP4 Client: Unhandled response line: " << _buffer;
-
-        _error = true;
-        return false;
-      }
+      _forward_false(_handle_raw_meta(QString{ _buffer }.trimmed()));
     }
 
-    // read next data.
-
-    auto nbuf = _sock->read(_bytes_to_read);
+    auto nbuf = stream.device()->read(_bytes_to_read);
 
     _bytes_to_read -= nbuf.size();
     _raw[_id][_field].append(nbuf);
@@ -206,6 +145,57 @@ IMAPResponse::_handle_raw() // NOLINT
       return false;
     }
   }
+}
+
+bool
+IMAPResponse::_handle_raw_meta(const QString& data)
+{
+  for (const auto& parsed : PAIRED_FETCH_REG.globalMatch(data)) {
+    // skip NIL
+    if (!parsed.hasCaptured("size")) {
+      continue;
+    }
+
+    bool ok = false;
+    auto bsize = parsed.captured("size").toLongLong(&ok);
+    if (!ok) {
+      qWarning() << "IMAP4 Client| Failed to parse FETCH size: Not a number.";
+      _emit_error();
+    }
+
+    // multiline data: return to _handle_raw
+    if (!parsed.hasCaptured("data")) {
+      _bytes_to_read = bsize;
+      _field = parsed.captured("field");
+      return true;
+    }
+
+    // inline data: save
+    _raw[_id][parsed.captured("field")] = parsed.captured("data").toLocal8Bit();
+  }
+
+  return true;
+}
+
+bool
+IMAPResponse::_read_line_to_buffer(const QDataStream& stream)
+{
+  if (!_buffer.endsWith("\r\n")) {
+    _buffer.append(stream.device()->readLine());
+  } else {
+    _buffer = stream.device()->readLine();
+  }
+
+  if (_buffer.isEmpty()) {
+    qWarning() << "IMAP4 Client| Failed to parse response: Unexpected EOF.";
+    _emit_error();
+  }
+
+  if (!_buffer.endsWith("\r\n")) {
+    return false;
+  }
+
+  return true;
 }
 
 }

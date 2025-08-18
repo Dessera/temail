@@ -13,18 +13,21 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <qanystringview.h>
 #include <qeventloop.h>
 #include <qlist.h>
 #include <qmap.h>
+#include <qmutex.h>
 #include <qobject.h>
 #include <qqueue.h>
 #include <qregularexpression.h>
 #include <qsslsocket.h>
 #include <qtimer.h>
 #include <qtmetamacros.h>
+#include <queue>
 #include <qvariant.h>
 #include <utility>
 #include <vector>
@@ -55,14 +58,12 @@ public:
    * @brief Client status types.
    *
    */
-  enum Status : uint8_t
+  enum class Status : uint8_t
   {
-    S_DISCONNECT,   /**< Client has been disconnected. */
-    S_CONNECT,      /**< Client has been connected. */
-    S_AUTHENTICATE, /**< Client has been authenticated. */
+    DISCONNECT,   /**< Client has been disconnected. */
+    CONNECT,      /**< Client has been connected. */
+    AUTHENTICATE, /**< Client has been authenticated. */
   };
-
-  Q_ENUM(Status)
 
   /**
    * @brief IMAP4 response types.
@@ -109,36 +110,45 @@ public:
 
   Q_ENUM(Command)
 
-  using ResponseHandler =
-    std::function<void(detail::IMAPResponse*,
-                       std::function<void(ErrorType, const QString&)>,
-                       std::function<void(const QVariant&)>)>;
+  using ResponseHandler = std::function<
+    void(const detail::IMAPResponse&, ErrorCallback, CommandCallback)>;
 
   constexpr static uint16_t PORT_NO_SSL =
     143; /**< Default port when don't using SSL. */
   constexpr static uint16_t PORT_USE_SSL =
     993; /**< Default port when using SSL. */
 
-  constexpr static const char* CRLF = "\r\n"; /**< Crlf. */
+  inline static const QString CONNECT_TAG =
+    "CONNECT"; /**< Response tag used by connect. */
+  inline static const QString DISCONNECT_TAG =
+    "DISCONNECT"; /**< Response tag used by disconnect. */
 
   inline static const QMap<request::Fetch::Field, QString> FETCH_FIELD{
-    { request::Fetch::SIMPLE, "BODY.PEEK[HEADER]" },
-    { request::Fetch::TEXT, "(BODY[HEADER.FIELDS (CONTENT-TYPE)] BODY[1])" }
-  };
+    { request::Fetch::ENVELOPE,
+      "BODY.PEEK[HEADER.FIELDS (DATE SUBJECT FROM TO)]" },
+    { request::Fetch::MIME,
+      "BODY.PEEK[HEADER.FIELDS (CONTENT-TYPE)] BODY.PEEK[1.MIME]" },
+    { request::Fetch::TEXT, "BODY[1]" }
+  }; /**< Request fetch field to command map. */
 
   static const QMap<Command, ResponseHandler>
     RESPONSE_HANDLER; /**< Response handler map. */
 
 private:
-  QSslSocket* _sock;
-  QQueue<QVariant> _queue;
+  QSslSocket _sock;
+  std::queue<QVariant> _queue;
+  Status _status{ Status::DISCONNECT };
 
-  std::unique_ptr<TagGenerator> _tags{ nullptr };
+  TagGenerator _tags;
+  std::deque<QPair<Command, detail::IMAPResponse>> _resp;
+  QMap<QString, QPair<CommandCallback, ErrorCallback>> _resp_cb;
 
-  Status _status{ S_DISCONNECT };
-
-  std::vector<QPair<Command, std::unique_ptr<detail::IMAPResponse>>> _resp;
-  QMap<QString, CommandCallback> _resp_callback;
+  QMutex _resp_lock;    /**< Lock to ensure thread safe of `_resp`. */
+  QMutex _request_lock; /**< Lock to ensure sync enqueue (to `_resp`), because
+                           `flush` operation may fail, maybe we need to pop
+                           immediately after push. */
+  QMutex _read_lock;    /**> Lock to ensure thread safe of `read`. */
+  QMutex _cb_lock;      /**> Lock to ensure thread safe of callback map.  */
 
 public:
   /**
@@ -159,9 +169,9 @@ public:
     const CommandCallback& callback = _default_command_handler) override;
   bool is_connected() override
   {
-    return _status == S_CONNECT || _status == S_AUTHENTICATE;
+    return _status == Status::CONNECT || _status == Status::AUTHENTICATE;
   }
-  bool is_disconnected() override { return _status == S_DISCONNECT; }
+  bool is_disconnected() override { return _status == Status::DISCONNECT; }
   void login(
     const QString& username,
     const QString& password,
@@ -182,45 +192,59 @@ public:
     const CommandCallback& callback = _default_command_handler) override;
   void fetch(
     std::size_t id,
-    request::Fetch::Field field,
+    request::Fetch::FieldFlags field,
     std::size_t range = 1,
     const CommandCallback& callback = _default_command_handler) override;
   QVariant read() override;
 
 private:
   /**
-   * @brief Helper to trig an error.
-   *
-   * @param err Error type.
-   * @param estr Error string.
-   */
-  TEMAIL_INLINE void _trig_error(ErrorType err, const QString& estr)
-  {
-    _set_error(err, estr);
-    emit error_occurred();
-  }
-
-  /**
-   * @brief Helper to trig an error.
-   *
-   * @param err Error type.
-   * @param estr Error string.
-   */
-  TEMAIL_INLINE void _trig_error(ErrorType err, QString&& estr)
-  {
-    _set_error(err, std::move(estr));
-    emit error_occurred();
-  }
-
-  /**
    * @brief Helper to send a command.
    *
    * @param type Command type,
    * @param cmd Command content.
+   * @param callback Success callback.
    */
   void _request(Command type,
                 QAnyStringView cmd,
                 const CommandCallback& callback);
+
+  /**
+   * @brief Set error for specific command.
+   *
+   * @param tag Command tag.
+   * @param error Error type.
+   * @param estr Error string.
+   */
+  void _tag_error(const QString& tag, ErrorType error, const QString& estr);
+
+  /**
+   * @brief Handles success callback.
+   *
+   * @param tag Command tag.
+   * @param data Response data.
+   */
+  void _handle_success(const QString& tag, const QVariant& data);
+
+  /**
+   * @brief Handles error callback.
+   *
+   * @param tag Command tag.
+   * @param error Error type.
+   * @param estr Error string.
+   */
+  void _handle_error(const QString& tag, ErrorType error, const QString& estr);
+
+  /**
+   * @brief Add command handlers.
+   *
+   * @param tag Command tag.
+   * @param success Success handler.
+   * @param error Error handler.
+   */
+  void _add_handler(const QString& tag,
+                    const CommandCallback& success,
+                    const ErrorCallback& error);
 
 private slots: // NOLINT
   /**

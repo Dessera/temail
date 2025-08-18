@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <qbytearray.h>
+#include <qdatastream.h>
 #include <qlist.h>
 #include <qmap.h>
 #include <qpair.h>
@@ -48,15 +49,21 @@ public:
   }; /**< Regex to parse untagged trailing response. */
 
   inline static QRegularExpression UNTAGGED_FETCH_REG{
-    R"REGEX(\* (?P<id>[0-9]+) FETCH \((?P<field>[A-Za-z0-9-\[\]\(\)\.\s]+) {(?P<size>[0-9]+)})REGEX"
+    R"REGEX(\* (?P<id>[0-9]+) FETCH \((?P<data>.*)(\))?)REGEX"
   }; /**< Regex to parse first FETCH response. */
 
-  inline static QRegularExpression MULTI_FETCH_REG{
-    R"REGEX( (?P<field>[A-Za-z0-9-\[\]\(\)\.\s]+) {(?P<size>[0-9]+)})REGEX"
-  }; /**< Regex to parse next FETCH response. */
+  /**
+   * @brief Regex to parse FETCH paired response.
+   *
+   * @note - BODY[1.MIME] NIL => (field BODY[1.MIME])
+   *       - BODY[HEADER.FIELDS (CONTENT-TYPE)] {12} => (field
+   * BODY[HEADER.FIELDS (CONTENT-TYPE)]) (size 12)
+   */
+  inline static QRegularExpression PAIRED_FETCH_REG{
+    R"REGEX(\s?(?P<field>[A-Za-z0-9-\[\]\(\)\.\s]+?) (NIL|{(?P<size>[0-9]+)}(\s(?P<data>[\s\S]*))?)\s?)REGEX"
+  };
 
 private:
-  QSslSocket* _sock;
   QString _tag;
 
   bool _raw_mode{ false };
@@ -80,9 +87,8 @@ public:
    * @param sock Tcp socket.
    * @param tag Request tag.
    */
-  IMAPResponse(QSslSocket* sock, QString tag)
-    : _sock{ sock }
-    , _tag{ std::move(tag) }
+  IMAPResponse(QString tag)
+    : _tag{ std::move(tag) }
   {
   }
 
@@ -92,7 +98,7 @@ public:
    * @return true Succesfully parsed data.
    * @return false Need more input or error occurred.
    */
-  bool digest();
+  bool digest(const QByteArray& data);
 
   /**
    * @brief Get error flag.
@@ -113,8 +119,8 @@ public:
   /**
    * @brief Get untagged response.
    *
-   * @return const QList<QPair<IMAP::Response, QString>>& Untagged response with
-   * code and data pair.
+   * @return const QList<QPair<IMAP::Response, QString>>& Untagged response
+   * with code and data pair.
    */
   [[nodiscard]] TEMAIL_INLINE auto& untagged() const { return _untagged; }
 
@@ -132,8 +138,8 @@ public:
   /**
    * @brief Get raw response.
    *
-   * @return const QMap<std::size_t, QMap<QString, QByteArray>>& Map of mail id
-   * and a submap, which contains fetch field and data.
+   * @return const QMap<std::size_t, QMap<QString, QByteArray>>& Map of mail
+   * id and a submap, which contains fetch field and data.
    */
   [[nodiscard]] TEMAIL_INLINE auto& raw() const { return _raw; }
 
@@ -146,36 +152,59 @@ public:
 
 private:
   /**
-   * @brief Handles tagged input data.
-   *
-   * @return true Successfully parsed tagged data.
-   * @return false Need more input or error occurred.
-   */
-  bool _handle_tagged();
-
-  /**
-   * @brief Handles untagged input data.
-   *
-   * @return true Successfully parsed untagged data.
-   * @return false Need more input or error occurred.
-   */
-  bool _handle_untagged();
-
-  /**
    * @brief Handles command input data.
    *
+   * @param stream Data stream.
    * @return true Successfully parsed command data.
    * @return false Need more input or error occurred.
    */
-  bool _handle_command();
+  bool _handle_command(const QDataStream& stream);
 
   /**
    * @brief Handles raw input data.
    *
+   * @param stream Data stream.
    * @return true Successfully parsed raw data.
    * @return false Need more input or error occurred.
    */
-  bool _handle_raw();
+  bool _handle_raw(const QDataStream& stream);
+
+  /**
+   * @brief Handles tagged input data.
+   *
+   * @param data Data string.
+   * @return true Successfully parsed untagged data.
+   * @return false Error occurred.
+   */
+  bool _handle_tagged(const QString& data);
+
+  /**
+   * @brief Handles untagged input data.
+   *
+   * @param data Data string.
+   * @param stream Data stream.
+   * @return true Successfully parsed untagged data.
+   * @return false Need more input or error occurred.
+   */
+  bool _handle_untagged(const QString& data, const QDataStream& stream);
+
+  /**
+   * @brief Handles raw paired input data.
+   *
+   * @param data Data string.
+   * @return true Successfully parsed raw data.
+   * @return false Error occurred.
+   */
+  bool _handle_raw_meta(const QString& data);
+
+  /**
+   * @brief Try to Read a line into buffer.
+   *
+   * @param stream Data stream.
+   * @return true Read successfully.
+   * @return false Failed to read a line (EOF or error).
+   */
+  bool _read_line_to_buffer(const QDataStream& stream);
 };
 
 }

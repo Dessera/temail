@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <qflags.h>
 #include <qobject.h>
 #include <qtmetamacros.h>
 
@@ -68,11 +69,18 @@ public:
    */
   enum Field : uint8_t
   {
-    SIMPLE, /**< Simple mail info. */
-    TEXT,   /**< Mail body. */
+    ENVELOPE =
+      0b001,      /**< Non-standard ENVELOPE macro (date, subject, from, to). */
+    MIME = 0b010, /**< MIME info. */
+    TEXT = 0b100, /**< Mail text (first part). */
   };
 
   Q_ENUM(Field)
+
+  Q_DECLARE_FLAGS(FieldFlags, Field)
+  Q_FLAG(FieldFlags)
 };
 
 }
+
+Q_DECLARE_OPERATORS_FOR_FLAGS(temail::client::request::Fetch::FieldFlags)

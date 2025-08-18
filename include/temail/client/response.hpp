@@ -14,13 +14,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <ostream>
+#include <qdatetime.h>
 #include <qdebug.h>
 #include <qlist.h>
+#include <qmap.h>
 #include <qstring.h>
 #include <qstringlist.h>
 #include <qvariant.h>
 #include <utility>
 
+#include "temail/client/request.hpp"
 #include "temail/common.hpp"
 
 namespace temail::client::response {
@@ -77,6 +80,26 @@ struct Noop
  */
 using Search = QList<std::size_t>;
 
+struct FetchEnvelope
+{
+  QDateTime date;
+  QString from;
+  QString to;
+  QString subject;
+};
+
+struct FetchContentType
+{
+  QString content_type;
+  QString charset;
+};
+
+/**
+ * @brief Fetch response.
+ *
+ */
+using Fetch = QList<QMap<request::Fetch::Field, QVariant>>;
+
 }
 
 Q_DECLARE_METATYPE(temail::client::response::Login)
@@ -115,4 +138,29 @@ TEMAIL_INLINE QDebug&
 operator<<(QDebug& dbg, const temail::client::response::Noop& /*response*/)
 {
   return dbg.noquote() << "Noop";
+}
+
+Q_DECLARE_METATYPE(temail::client::response::FetchEnvelope)
+
+TEMAIL_INLINE QDebug&
+operator<<(QDebug& dbg, const temail::client::response::FetchEnvelope& response)
+{
+  return dbg.noquote()
+         << QString{ "FetchEnvelope[date: %1, from: %2, to: %3, subject: %4]" }
+              .arg(response.date.toString())
+              .arg(response.from)
+              .arg(response.to)
+              .arg(response.subject);
+}
+
+Q_DECLARE_METATYPE(temail::client::response::FetchContentType)
+
+TEMAIL_INLINE QDebug&
+operator<<(QDebug& dbg,
+           const temail::client::response::FetchContentType& response)
+{
+  return dbg.noquote()
+         << QString{ "FetchContentType[content_type: %1, charset: %2]" }
+              .arg(response.content_type)
+              .arg(response.charset);
 }

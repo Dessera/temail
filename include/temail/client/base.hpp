@@ -18,6 +18,7 @@
 #include <qstring.h>
 #include <qtimer.h>
 #include <qvariant.h>
+#include <utility>
 
 #include "temail/client/request.hpp"
 #include "temail/common.hpp"
@@ -67,6 +68,7 @@ public:
   Q_ENUM(ErrorType)
 
   using CommandCallback = std::function<void(const QVariant&)>;
+  using ErrorCallback = std::function<void(ErrorType, const QString&)>;
 
   constexpr static int TIMEOUT_MSECS = 30000; /**< Default timeout. */
 
@@ -205,7 +207,7 @@ public:
    */
   virtual void fetch(
     std::size_t id,
-    request::Fetch::Field field,
+    request::Fetch::FieldFlags field,
     std::size_t range = 1,
     const CommandCallback& callback = _default_command_handler) = 0;
 
@@ -268,7 +270,20 @@ public:
   }
 
 protected:
+  /**
+   * @brief Default command handler.
+   *
+   */
   static void _default_command_handler(const QVariant& /*data*/) {}
+
+  /**
+   * @brief Default error handler.
+   *
+   */
+  static void _default_error_handler(ErrorType /*error*/,
+                                     const QString& /*estr*/)
+  {
+  }
 
   /**
    * @brief Wait for specific signal.
@@ -305,18 +320,7 @@ protected:
   {
     _error = type;
     _estr = estr;
-  }
-
-  /**
-   * @brief Set error status.
-   *
-   * @param type Error status.
-   * @param estr Error string.
-   */
-  TEMAIL_INLINE void _set_error(ErrorType type, QString&& estr)
-  {
-    _error = type;
-    _estr = std::move(estr);
+    emit error_occurred(type, estr);
   }
 
 signals:
@@ -342,7 +346,7 @@ signals:
    * @brief Emiteed when error occurred in client.
    *
    */
-  void error_occurred();
+  void error_occurred(ErrorType error, const QString& estr);
 };
 
 }

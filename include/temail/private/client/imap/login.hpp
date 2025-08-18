@@ -15,6 +15,7 @@
 #include <qstring.h>
 #include <qvariant.h>
 
+#include "temail/client/imap.hpp"
 #include "temail/private/client/imap/response.hpp"
 
 namespace temail::client::detail {
@@ -27,9 +28,7 @@ namespace temail::client::detail {
  * @param success_handler Emitted on success with value.
  */
 void
-imap_handle_login(
-  IMAPResponse* resp,
-  const std::function<void(IMAP::ErrorType, const QString&)>& error_handler,
-  const std::function<void(const QVariant&)>& success_handler);
-
+imap_handle_login(const detail::IMAPResponse& resp,
+                  const IMAP::ErrorCallback& error_handler,
+                  const IMAP::CommandCallback& success_handler);
 }

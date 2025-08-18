@@ -34,29 +34,28 @@ _parse_attrs(const QString& attrs_str)
 }
 
 void
-imap_handle_list(
-  IMAPResponse* resp,
-  const std::function<void(IMAP::ErrorType, const QString&)>& error_handler,
-  const std::function<void(const QVariant&)>& success_handler)
+imap_handle_list(const detail::IMAPResponse& resp,
+                 const IMAP::ErrorCallback& error_handler,
+                 const IMAP::CommandCallback& success_handler)
 {
-  if (resp->tagged().size() != 1) {
+  if (resp.tagged().size() != 1) {
     error_handler(IMAP::E_UNEXPECTED, "Unexpected tagged response");
     return;
   }
 
-  if (resp->tagged()[0].first == IMAP::Response::NO) {
-    error_handler(IMAP::E_REFERENCE, resp->tagged()[0].second);
+  if (resp.tagged()[0].first == IMAP::Response::NO) {
+    error_handler(IMAP::E_REFERENCE, resp.tagged()[0].second);
     return;
   }
 
-  if (resp->tagged()[0].first == IMAP::Response::BAD) {
-    error_handler(IMAP::E_BADCOMMAND, resp->tagged()[0].second);
+  if (resp.tagged()[0].first == IMAP::Response::BAD) {
+    error_handler(IMAP::E_BADCOMMAND, resp.tagged()[0].second);
     return;
   }
 
   auto list_resp = response::List{};
 
-  for (const auto& [type, data] : resp->untagged()) {
+  for (const auto& [type, data] : resp.untagged()) {
     if (type != IMAP::Response::LIST) {
       qWarning() << "Failed to parse LIST response: Unexpected type." << type;
       continue;
